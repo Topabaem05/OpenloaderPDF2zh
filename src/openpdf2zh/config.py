@@ -21,7 +21,7 @@ class AppSettings:
     port: int = 7860
     workspace_root: Path = Path("workspace")
     default_provider: str = "openrouter"
-    default_model: str = "openrouter/auto"
+    default_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     default_target_language: str = "Simplified Chinese"
     default_ocr_langs: str = "ko,en,ch_sim"
     hybrid_backend: str = "docling-fast"
@@ -46,7 +46,10 @@ class AppSettings:
                 os.getenv("OPENPDF2ZH_WORKSPACE_ROOT", "workspace")
             ).resolve(),
             default_provider=os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER", "openrouter"),
-            default_model=os.getenv("OPENPDF2ZH_DEFAULT_MODEL", "openrouter/auto"),
+            default_model=os.getenv(
+                "OPENPDF2ZH_DEFAULT_MODEL",
+                "nvidia/nemotron-3-super-120b-a12b:free",
+            ),
             default_target_language=os.getenv(
                 "OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE", "Simplified Chinese"
             ),

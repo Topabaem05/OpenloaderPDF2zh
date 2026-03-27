@@ -109,6 +109,12 @@ def _build_pdf_preview(path: Path | None, empty_message: str, title: str) -> str
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     settings = settings or AppSettings.from_env()
+    provider_choices = ["openrouter", "libretranslate"]
+    default_provider = (
+        settings.default_provider
+        if settings.default_provider in provider_choices
+        else "openrouter"
+    )
 
     def default_model_for_provider(selected_provider: str) -> str:
         if selected_provider == "libretranslate":
@@ -140,12 +146,12 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 )
                 provider = gr.Radio(
                     label="Translation provider",
-                    choices=["openrouter", "groq", "libretranslate"],
-                    value=settings.default_provider,
+                    choices=provider_choices,
+                    value=default_provider,
                 )
                 model = gr.Textbox(
                     label="Model ID",
-                    value=default_model_for_provider(settings.default_provider),
+                    value=default_model_for_provider(default_provider),
                     placeholder="Example: openrouter/auto or libretranslate",
                 )
                 force_ocr = gr.Checkbox(
@@ -285,11 +291,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             )
 
         def sync_model(selected_provider: str, current_model: str) -> str:
-            if selected_provider == "libretranslate":
-                return "libretranslate"
-            if current_model.strip() == "libretranslate":
-                return default_model_for_provider(selected_provider)
-            return current_model
+            return default_model_for_provider(selected_provider)
 
         def reset_form() -> tuple[
             None,
@@ -309,8 +311,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             return (
                 None,
                 settings.default_target_language,
-                settings.default_provider,
-                default_model_for_provider(settings.default_provider),
+                default_provider,
+                default_model_for_provider(default_provider),
                 False,
                 _parse_ocr_langs(settings.default_ocr_langs),
                 settings.libretranslate_url,
