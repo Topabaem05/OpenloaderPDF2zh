@@ -22,6 +22,11 @@ class TranslationUnit:
     label: str
     bbox: list[float]
     original: str
+    font_size: float | None = None
+    font_name: str = ""
+    estimated_line_count: int = 1
+    line_height_pt: float | None = None
+    letter_spacing_em: float | None = None
     translated: str = ""
 
 
@@ -38,6 +43,7 @@ class JobWorkspace:
     structured_json: Path
     translated_markdown: Path
     translated_pdf: Path
+    detected_boxes_pdf: Path
     translation_units_jsonl: Path
     render_report_json: Path
     run_log: Path
@@ -60,6 +66,7 @@ class PipelineResult:
     def generated_files(self) -> list[str]:
         ordered = [
             self.workspace.translated_pdf,
+            self.workspace.detected_boxes_pdf,
             self.workspace.structured_json,
             self.workspace.translated_markdown,
             self.workspace.translation_units_jsonl,

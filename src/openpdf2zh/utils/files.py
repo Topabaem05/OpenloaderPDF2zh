@@ -51,6 +51,7 @@ def prepare_workspace(root: Path, source_pdf: Path) -> JobWorkspace:
         structured_json=output_dir / "structured.json",
         translated_markdown=output_dir / "result.md",
         translated_pdf=output_dir / "translated_mono.pdf",
+        detected_boxes_pdf=output_dir / "detected_boxes.pdf",
         translation_units_jsonl=output_dir / "translation_units.jsonl",
         render_report_json=output_dir / "render_report.json",
         run_log=logs_dir / "run.log",

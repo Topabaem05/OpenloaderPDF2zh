@@ -23,3 +23,8 @@ def test_translation_unit_defaults() -> None:
         original="hello",
     )
     assert unit.translated == ""
+    assert unit.font_size is None
+    assert unit.font_name == ""
+    assert unit.estimated_line_count == 1
+    assert unit.line_height_pt is None
+    assert unit.letter_spacing_em is None
