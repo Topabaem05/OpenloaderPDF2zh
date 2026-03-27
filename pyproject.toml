@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openpdf2zh-gradio"
+version = "0.1.0"
+description = "Python-only Gradio skeleton for PDF translation with OpenDataLoader-PDF"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "gradio>=6.10,<7",
+  "opendataloader-pdf[hybrid]>=2.1.1,<3",
+  "openai>=1.0.0",
+  "PyMuPDF>=1.27.2,<2",
+  "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.5.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
