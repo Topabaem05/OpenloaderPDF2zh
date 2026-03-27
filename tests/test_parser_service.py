@@ -3,12 +3,39 @@ import subprocess
 import types
 from pathlib import Path
 
+import fitz
 import pytest
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.services.parser_service import HybridBackendManager, ParserService
 from openpdf2zh.utils.files import prepare_workspace
+
+
+class _PreviewPage:
+    def __init__(self) -> None:
+        self.transformation_matrix = fitz.Matrix(1, 1)
+        self.rectangles: list[
+            tuple[fitz.Rect, tuple[float, float, float], float, bool]
+        ] = []
+
+    def draw_rect(self, rect, color, width, overlay) -> None:
+        self.rectangles.append((rect, color, width, overlay))
+
+
+class _PreviewDoc:
+    def __init__(self, page_count: int = 1) -> None:
+        self.pages = [_PreviewPage() for _ in range(page_count)]
+        self.saved_path: str | None = None
+
+    def __len__(self) -> int:
+        return len(self.pages)
+
+    def __getitem__(self, index: int) -> _PreviewPage:
+        return self.pages[index]
+
+    def save(self, path: str, **kwargs) -> None:
+        self.saved_path = path
 
 
 def test_hybrid_backend_manager_raises_actionable_error_when_binary_missing(
@@ -199,3 +226,29 @@ def test_parser_service_force_ocr_requires_available_backend(
 
     with pytest.raises(RuntimeError, match=r"opendataloader-pdf\[hybrid\]"):
         parser.parse(request, workspace)
+
+
+def test_build_detected_boxes_preview_creates_overlay_pdf(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "sample.pdf"
+    source_pdf.write_text("fake pdf", encoding="utf-8")
+    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
+    workspace.raw_json.write_text(
+        '{"pages": [{"page": 1, "items": ['
+        '{"type": "paragraph", "page": 1, "bbox": [0, 0, 10, 10], "content": "hello"},'
+        '{"type": "heading", "page": 1, "bbox": [10, 10, 20, 20], "content": "title"}]}]}',
+        encoding="utf-8",
+    )
+    preview_doc = _PreviewDoc()
+    monkeypatch.setattr(
+        "openpdf2zh.services.parser_service.fitz.open", lambda _: preview_doc
+    )
+
+    parser = ParserService(AppSettings())
+    output_path = parser._build_detected_boxes_preview(workspace)
+
+    assert output_path == workspace.detected_boxes_pdf
+    assert preview_doc.saved_path == str(workspace.detected_boxes_pdf)
+    assert len(preview_doc.pages[0].rectangles) == 2

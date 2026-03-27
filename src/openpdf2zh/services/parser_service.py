@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import atexit
+import json
 import os
 import socket
 import subprocess
 import warnings
 import time
 from pathlib import Path
+
+import fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
@@ -194,4 +197,90 @@ class ParserService:
                 workspace.parsed_dir, workspace.raw_markdown, [".md", ".markdown"]
             )
             append_run_log(workspace.run_log, "parser=artifacts:done")
+            try:
+                self._build_detected_boxes_preview(workspace)
+            except Exception as exc:
+                warning_message = (
+                    "Detected text boxes preview could not be generated. "
+                    "Translation will continue without the parser box preview."
+                )
+                warnings.warn(
+                    f"{warning_message} Detail: {exc}", RuntimeWarning, stacklevel=2
+                )
+                append_run_log(workspace.run_log, f"warning={warning_message}")
         return workspace.raw_json, workspace.raw_markdown
+
+    def _build_detected_boxes_preview(self, workspace: JobWorkspace) -> Path:
+        payload = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
+        document = fitz.open(str(workspace.input_pdf))
+
+        for entry in self._iter_detected_boxes(payload):
+            page_index = entry["page_number"] - 1
+            if page_index < 0 or page_index >= len(document):
+                continue
+            page = document[page_index]
+            rect = self._pdf_bbox_to_rect(page, entry["bbox"])
+            color = self._box_color(entry["label"])
+            page.draw_rect(rect, color=color, width=1.1, overlay=True)
+
+        document.save(
+            str(workspace.detected_boxes_pdf),
+            garbage=4,
+            deflate=True,
+            clean=True,
+        )
+        append_run_log(
+            workspace.run_log,
+            f"parser=detected_boxes_preview {workspace.detected_boxes_pdf}",
+        )
+        return workspace.detected_boxes_pdf
+
+    def _iter_detected_boxes(self, payload: object) -> list[dict[str, object]]:
+        entries: list[dict[str, object]] = []
+
+        def walk(node: object) -> None:
+            if isinstance(node, dict):
+                label = str(node.get("type", node.get("label", ""))).strip().lower()
+                bbox = node.get("bounding box", node.get("bbox"))
+                page_number = node.get("page number", node.get("page"))
+                if (
+                    label in {"paragraph", "heading", "caption", "list item"}
+                    and isinstance(page_number, int)
+                    and isinstance(bbox, list)
+                    and len(bbox) == 4
+                ):
+                    entries.append(
+                        {
+                            "label": label,
+                            "page_number": page_number,
+                            "bbox": [float(value) for value in bbox],
+                        }
+                    )
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(payload)
+        return entries
+
+    def _box_color(self, label: str) -> tuple[float, float, float]:
+        return {
+            "paragraph": (0.12, 0.49, 0.95),
+            "heading": (0.87, 0.29, 0.25),
+            "caption": (0.14, 0.64, 0.31),
+            "list item": (0.78, 0.45, 0.1),
+        }.get(label, (0.5, 0.5, 0.5))
+
+    def _pdf_bbox_to_rect(self, page: fitz.Page, bbox: list[float]) -> fitz.Rect:
+        left, bottom, right, top = [float(value) for value in bbox]
+        matrix = page.transformation_matrix
+        point_a = fitz.Point(left, top) * matrix
+        point_b = fitz.Point(right, bottom) * matrix
+        return fitz.Rect(
+            min(point_a.x, point_b.x),
+            min(point_a.y, point_b.y),
+            max(point_a.x, point_b.x),
+            max(point_a.y, point_b.y),
+        )
