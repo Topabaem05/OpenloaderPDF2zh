@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import quote
 
 import gradio as gr
 
@@ -13,6 +14,29 @@ CSS = """
 .gradio-container {zoom: 0.8;}
 .app-shell {max-width: 1200px; margin: 0 auto;}
 .hint {color: #4b5563; font-size: 0.95rem;}
+.pdf-preview-shell {
+  width: 100%;
+  min-height: 720px;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  background: white;
+  overflow: hidden;
+}
+.pdf-preview-shell iframe {
+  width: 100%;
+  height: 720px;
+  border: 0;
+  display: block;
+  background: white;
+}
+.pdf-preview-empty {
+  min-height: 720px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+}
 """
 
 TARGET_LANGUAGE_CHOICES = [
@@ -49,18 +73,37 @@ def _build_runtime_settings(
     provider: str,
     libretranslate_url: str,
     libretranslate_api_key: str,
+    render_font_file: str | None,
 ) -> AppSettings:
-    if provider != "libretranslate":
-        return settings
-
-    normalized_url = libretranslate_url.strip().rstrip("/")
-    if not normalized_url:
-        raise gr.Error("Please enter a LibreTranslate server URL.")
+    normalized_url = settings.libretranslate_url
+    if provider == "libretranslate":
+        normalized_url = libretranslate_url.strip().rstrip("/")
+        if not normalized_url:
+            raise gr.Error("Please enter a LibreTranslate server URL.")
 
     return replace(
         settings,
         libretranslate_url=normalized_url,
         libretranslate_api_key=libretranslate_api_key.strip(),
+        render_font_path=(
+            render_font_file.strip() if render_font_file else settings.render_font_path
+        ),
+    )
+
+
+def _build_pdf_preview(path: Path | None, empty_message: str, title: str) -> str:
+    if path is None:
+        return (
+            "<div class='pdf-preview-shell'>"
+            f"<div class='pdf-preview-empty hint'>{empty_message}</div>"
+            "</div>"
+        )
+
+    pdf_url = f"/gradio_api/file={quote(str(path))}"
+    return (
+        "<div class='pdf-preview-shell'>"
+        f"<iframe src='{pdf_url}#toolbar=1&navpanes=0' title='{title}'></iframe>"
+        "</div>"
     )
 
 
@@ -130,6 +173,22 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         type="password",
                         info="Leave blank for self-hosted LibreTranslate servers unless you configured API keys.",
                     )
+                with gr.Accordion("Render options", open=False):
+                    render_font_file = gr.File(
+                        label="Custom render font file (optional)",
+                        file_count="single",
+                        file_types=[".ttf", ".ttc", ".otf"],
+                        type="filepath",
+                        interactive=True,
+                    )
+                    gr.Markdown(
+                        """
+                        <div class="hint">
+                        Drag and drop a TTF/TTC/OTF font file or click to choose one.
+                        If left empty, the app uses the parsed source font family or the configured environment fallback.
+                        </div>
+                        """
+                    )
                 run_btn = gr.Button("Run translation", variant="primary")
                 clear_btn = gr.Button("Reset")
                 gr.Markdown(
@@ -138,18 +197,37 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                     Use <code>force OCR</code> for scanned or image-only PDFs.
                     Keep the model field editable so provider/model choices can change without code changes.
                     LibreTranslate ignores the model ID and uses the server URL configured below.
+                    If a render font file is uploaded, translated text is rendered with that TTF/TTC/OTF resource.
                     </div>
                     """,
                 )
 
             with gr.Column(scale=6):
-                summary = gr.Markdown(
-                    "Upload a PDF and click **Run translation**.",
-                    label="Run summary",
+                translated_pdf_preview = gr.HTML(
+                    value=_build_pdf_preview(
+                        None,
+                        "Translated PDF preview will appear here.",
+                        "Translated PDF preview",
+                    ),
+                    container=False,
+                    padding=False,
+                    apply_default_css=False,
                 )
-                generated_files = gr.File(
-                    label="Generated files",
-                )
+                with gr.Accordion("Detected text boxes preview", open=False):
+                    detected_boxes_preview = gr.HTML(
+                        value=_build_pdf_preview(
+                            None,
+                            "Detected text boxes preview will appear here.",
+                            "Detected text boxes preview",
+                        ),
+                        container=False,
+                        padding=False,
+                        apply_default_css=False,
+                    )
+                with gr.Accordion("Generated files", open=False):
+                    generated_files = gr.File(
+                        label="Generated files",
+                    )
                 workspace_path = gr.Textbox(
                     label="Workspace folder",
                     interactive=False,
@@ -164,8 +242,9 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             ocr_langs: list[str],
             libretranslate_url: str,
             libretranslate_api_key: str,
+            render_font_file: str | None,
             progress: gr.Progress = gr.Progress(track_tqdm=False),
-        ) -> tuple[str, list[str], str]:
+        ) -> tuple[list[str], str, str, str]:
             if not input_pdf:
                 raise gr.Error("Please upload a PDF file first.")
 
@@ -176,6 +255,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 provider,
                 libretranslate_url,
                 libretranslate_api_key,
+                render_font_file,
             )
             runner = PipelineRunner(runner_settings)
 
@@ -190,9 +270,18 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             )
             result = runner.run(request, progress=progress)
             return (
-                result.summary_markdown,
                 result.generated_files(),
                 str(result.workspace_dir),
+                _build_pdf_preview(
+                    result.workspace.translated_pdf,
+                    "Translated PDF preview will appear here.",
+                    "Translated PDF preview",
+                ),
+                _build_pdf_preview(
+                    result.workspace.detected_boxes_pdf,
+                    "Detected text boxes preview will appear here.",
+                    "Detected text boxes preview",
+                ),
             )
 
         def sync_model(selected_provider: str, current_model: str) -> str:
@@ -211,8 +300,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             list[str],
             str,
             str,
-            str,
             None,
+            None,
+            str,
+            str,
             str,
         ]:
             return (
@@ -224,9 +315,19 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 _parse_ocr_langs(settings.default_ocr_langs),
                 settings.libretranslate_url,
                 settings.libretranslate_api_key,
-                "Upload a PDF and click **Run translation**.",
+                None,
                 None,
                 "",
+                _build_pdf_preview(
+                    None,
+                    "Translated PDF preview will appear here.",
+                    "Translated PDF preview",
+                ),
+                _build_pdf_preview(
+                    None,
+                    "Detected text boxes preview will appear here.",
+                    "Detected text boxes preview",
+                ),
             )
 
         provider.change(
@@ -247,8 +348,14 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 ocr_langs,
                 libretranslate_url,
                 libretranslate_api_key,
+                render_font_file,
             ],
-            outputs=[summary, generated_files, workspace_path],
+            outputs=[
+                generated_files,
+                workspace_path,
+                translated_pdf_preview,
+                detected_boxes_preview,
+            ],
             concurrency_limit=1,
         )
         clear_btn.click(
@@ -262,9 +369,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 ocr_langs,
                 libretranslate_url,
                 libretranslate_api_key,
-                summary,
+                render_font_file,
                 generated_files,
                 workspace_path,
+                translated_pdf_preview,
+                detected_boxes_preview,
             ],
             concurrency_limit=1,
         )
@@ -278,6 +387,7 @@ def launch() -> None:
     demo.launch(
         server_name=settings.host,
         server_port=settings.port,
+        allowed_paths=[str(settings.workspace_root)],
         theme=gr.themes.Soft(),
         css=CSS,
     )

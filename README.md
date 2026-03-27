@@ -56,6 +56,17 @@ LIBRETRANSLATE_API_KEY=
 or enter the same base URL in the Gradio UI under **LibreTranslate server**.
 Self-hosted LibreTranslate instances usually do not require an API key.
 
+## Rendering notes
+
+- The app preserves detected source text sizes from the OpenDataLoader parsed JSON when re-rendering translated text.
+- You can preview the translated PDF directly in the Gradio UI after a run finishes.
+- Optional custom font rendering is supported through PyMuPDF HTML rendering with `@font-face` and an archive-backed font file path.
+- To force a specific TTF/TTC/OTF during rendering, set:
+
+```bash
+OPENPDF2ZH_RENDER_FONT_PATH=/absolute/path/to/font.ttf
+```
+
 ## Environment Variables
 
 See `.env.example`.
