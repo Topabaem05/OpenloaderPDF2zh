@@ -15,7 +15,7 @@ class PipelineRunner:
         self.settings = settings
         self.parser = ParserService(settings)
         self.translator = TranslationService(settings)
-        self.renderer = RenderService()
+        self.renderer = RenderService(settings)
 
     def run(
         self, request: PipelineRequest, progress: Any | None = None
