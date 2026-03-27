@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from dataclasses import asdict
 from typing import Any, Iterable
 
@@ -24,7 +26,7 @@ class TranslationService:
         progress: Any | None = None,
     ) -> list[TranslationUnit]:
         raw_data = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
-        units = list(self._extract_units(raw_data))
+        units = self._postprocess_units(self._extract_units(raw_data))
         translator = self._build_translator(request.provider)
         total_units = len(units)
         append_run_log(
@@ -134,6 +136,8 @@ class TranslationService:
                 bbox = node.get("bounding box", node.get("bbox"))
                 label = str(node.get("type", node.get("label", "text")))
                 content = node.get("content")
+                font_size = node.get("font size", node.get("font_size"))
+                font_name = node.get("font")
                 if (
                     isinstance(page, int)
                     and isinstance(bbox, list)
@@ -142,13 +146,40 @@ class TranslationService:
                     and content.strip()
                 ):
                     counter += 1
+                    resolved_font_size = (
+                        float(font_size)
+                        if isinstance(font_size, (int, float))
+                        else None
+                    )
+                    bbox_values = [float(value) for value in bbox]
+                    estimated_line_count = self._estimate_line_count(
+                        content,
+                        bbox_values,
+                        resolved_font_size,
+                    )
                     units.append(
                         TranslationUnit(
                             unit_id=f"u{counter:05d}",
                             page_number=page,
                             label=label,
-                            bbox=[float(value) for value in bbox],
+                            bbox=bbox_values,
                             original=content.strip(),
+                            font_size=resolved_font_size,
+                            font_name=(
+                                font_name.strip() if isinstance(font_name, str) else ""
+                            ),
+                            estimated_line_count=estimated_line_count,
+                            line_height_pt=self._estimate_line_height(
+                                bbox_values,
+                                resolved_font_size,
+                                estimated_line_count,
+                            ),
+                            letter_spacing_em=self._estimate_letter_spacing(
+                                content,
+                                bbox_values,
+                                resolved_font_size,
+                                estimated_line_count,
+                            ),
                         )
                     )
                 for value in node.values():
@@ -159,6 +190,112 @@ class TranslationService:
 
         walk(payload)
         return units
+
+    def _postprocess_units(self, units: list[TranslationUnit]) -> list[TranslationUnit]:
+        processed: list[TranslationUnit] = []
+        for unit in units:
+            processed.extend(self._split_list_item_unit(unit))
+
+        for index, unit in enumerate(processed, start=1):
+            unit.unit_id = f"u{index:05d}"
+        return processed
+
+    def _split_list_item_unit(self, unit: TranslationUnit) -> list[TranslationUnit]:
+        if unit.label.strip().lower() != "list item":
+            return [unit]
+
+        segments = self._split_list_item_content(unit.original)
+        if len(segments) <= 1:
+            return [unit]
+
+        return self._subdivide_unit_bbox(unit, segments)
+
+    def _split_list_item_content(self, content: str) -> list[str]:
+        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        if len(lines) > 1:
+            return lines
+
+        text = content.strip()
+        if not text:
+            return []
+
+        matches = list(re.finditer(r"[●•▪◦■□]|(?:(?<!\S)\d+[.)])", text))
+        if len(matches) <= 1:
+            return [text]
+
+        parts: list[str] = []
+        if matches[0].start() > 0:
+            leading = text[: matches[0].start()].strip()
+            if leading:
+                parts.append(leading)
+
+        for index, match in enumerate(matches):
+            start = match.start()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            segment = text[start:end].strip()
+            if segment:
+                parts.append(segment)
+        return parts or [text]
+
+    def _subdivide_unit_bbox(
+        self,
+        unit: TranslationUnit,
+        segments: list[str],
+    ) -> list[TranslationUnit]:
+        left, bottom, right, top = unit.bbox
+        total_height = abs(top - bottom)
+        if total_height <= 0:
+            return [unit]
+
+        segment_line_counts: list[int] = []
+        for segment in segments:
+            segment_line_counts.append(
+                max(1, self._estimate_line_count(segment, unit.bbox, unit.font_size))
+            )
+
+        total_weight = max(sum(segment_line_counts), 1)
+        current_top = top
+        split_units: list[TranslationUnit] = []
+        for index, segment in enumerate(segments):
+            weight = segment_line_counts[index]
+            if index == len(segments) - 1:
+                segment_bottom = bottom
+            else:
+                segment_height = total_height * weight / total_weight
+                segment_bottom = current_top - segment_height
+
+            segment_bbox = [left, segment_bottom, right, current_top]
+            estimated_line_count = self._estimate_line_count(
+                segment,
+                segment_bbox,
+                unit.font_size,
+            )
+            split_units.append(
+                TranslationUnit(
+                    unit_id=unit.unit_id,
+                    page_number=unit.page_number,
+                    label=unit.label,
+                    bbox=segment_bbox,
+                    original=segment,
+                    font_size=unit.font_size,
+                    font_name=unit.font_name,
+                    estimated_line_count=estimated_line_count,
+                    line_height_pt=self._estimate_line_height(
+                        segment_bbox,
+                        unit.font_size,
+                        estimated_line_count,
+                    ),
+                    letter_spacing_em=self._estimate_letter_spacing(
+                        segment,
+                        segment_bbox,
+                        unit.font_size,
+                        estimated_line_count,
+                    ),
+                )
+            )
+            current_top = segment_bottom
+
+        return split_units
 
     def _build_structured_payload(
         self,
@@ -174,6 +311,11 @@ class TranslationService:
                     "label": unit.label,
                     "bbox": unit.bbox,
                     "content": unit.original,
+                    "font_name": unit.font_name,
+                    "font_size": unit.font_size,
+                    "estimated_line_count": unit.estimated_line_count,
+                    "line_height_pt": unit.line_height_pt,
+                    "letter_spacing_em": unit.letter_spacing_em,
                     "translated": unit.translated,
                 }
             )
@@ -201,3 +343,68 @@ class TranslationService:
             chunks.append(unit.translated or unit.original)
             chunks.append("")
         return "\n".join(chunks).strip() + "\n"
+
+    def _estimate_line_count(
+        self,
+        content: str,
+        bbox: list[float],
+        font_size: float | None,
+    ) -> int:
+        explicit_lines = max(
+            1, len([line for line in content.splitlines() if line.strip()])
+        )
+        if font_size is None or font_size <= 0:
+            return explicit_lines
+
+        bbox_height = abs(bbox[3] - bbox[1])
+        if bbox_height <= 0:
+            return explicit_lines
+
+        estimated = int(round(bbox_height / max(font_size * 1.15, 1.0)))
+        if len(content.strip()) >= 80:
+            estimated = max(estimated, 2)
+        return max(explicit_lines, min(max(estimated, 1), 24))
+
+    def _estimate_line_height(
+        self,
+        bbox: list[float],
+        font_size: float | None,
+        estimated_line_count: int,
+    ) -> float | None:
+        if font_size is None or font_size <= 0:
+            return None
+
+        bbox_height = abs(bbox[3] - bbox[1])
+        if bbox_height <= 0:
+            return round(font_size * 1.2, 3)
+
+        raw_line_height = bbox_height / max(estimated_line_count, 1)
+        clamped_line_height = min(
+            max(raw_line_height, font_size * 1.0), font_size * 1.8
+        )
+        return round(clamped_line_height, 3)
+
+    def _estimate_letter_spacing(
+        self,
+        content: str,
+        bbox: list[float],
+        font_size: float | None,
+        estimated_line_count: int,
+    ) -> float | None:
+        if font_size is None or font_size <= 0 or estimated_line_count != 1:
+            return None
+
+        visible_chars = len(re.sub(r"\s+", "", content))
+        if visible_chars < 2 or visible_chars > 24:
+            return None
+
+        bbox_width = abs(bbox[2] - bbox[0])
+        if bbox_width <= 0:
+            return None
+
+        avg_char_width = bbox_width / visible_chars
+        em_value = (avg_char_width / font_size) - 0.55
+        clamped_em = min(max(em_value, -0.05), 0.12)
+        if math.isclose(clamped_em, 0.0, abs_tol=0.005):
+            return None
+        return round(clamped_em, 3)

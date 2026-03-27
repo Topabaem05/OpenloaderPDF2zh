@@ -29,14 +29,18 @@ def test_translate_document_writes_progress_entries_to_run_log(
                             {
                                 "type": "paragraph",
                                 "page": 1,
-                                "bbox": [0, 0, 10, 10],
+                                "bbox": [0, 0, 120, 44],
+                                "font": "NanumMyeongjo",
+                                "font size": 18.5,
                                 "content": "hello",
                             },
                             {
-                                "type": "paragraph",
+                                "type": "list item",
                                 "page": 1,
-                                "bbox": [10, 10, 20, 20],
-                                "content": "world",
+                                "bbox": [10, 52, 140, 120],
+                                "font": "ArialMT",
+                                "font size": 12.0,
+                                "content": "● alpha entry ● beta entry",
                             },
                         ],
                     }
@@ -61,9 +65,24 @@ def test_translate_document_writes_progress_entries_to_run_log(
         workspace,
     )
 
-    assert len(units) == 2
+    assert len(units) == 3
+    assert units[0].font_name == "NanumMyeongjo"
+    assert units[0].font_size == 18.5
+    assert units[0].estimated_line_count == 2
+    assert units[0].line_height_pt is not None
+    assert units[1].label == "list item"
+    assert units[1].original == "● alpha entry"
+    assert units[2].original == "● beta entry"
+    assert units[1].bbox[3] == 120.0
+    assert units[2].bbox[1] == 52.0
+    structured = json.loads(workspace.structured_json.read_text(encoding="utf-8"))
+    assert structured["pages"][0]["elements"][0]["font_name"] == "NanumMyeongjo"
+    assert structured["pages"][0]["elements"][0]["font_size"] == 18.5
+    assert structured["pages"][0]["elements"][1]["content"] == "● alpha entry"
+    assert structured["pages"][0]["elements"][2]["content"] == "● beta entry"
+    assert structured["pages"][0]["elements"][1]["line_height_pt"] is not None
     log_text = workspace.run_log.read_text(encoding="utf-8")
-    assert "translation=extracted_units total=2 provider=libretranslate" in log_text
-    assert "translation=progress current=1/2 page=1 unit_id=u00001" in log_text
-    assert "translation=progress current=2/2 page=1 unit_id=u00002" in log_text
+    assert "translation=extracted_units total=3 provider=libretranslate" in log_text
+    assert "translation=progress current=1/3 page=1 unit_id=u00001" in log_text
+    assert "translation=progress current=3/3 page=1 unit_id=u00003" in log_text
     assert "translation=artifacts:done" in log_text
