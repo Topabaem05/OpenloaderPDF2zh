@@ -29,6 +29,7 @@ class AppSettings:
     hybrid_timeout_ms: int = 120000
     manage_hybrid_backend: bool = True
     base_font_size: float = 10.0
+    render_font_path: str = ""
     openrouter_api_key: str = ""
     groq_api_key: str = ""
     libretranslate_url: str = "http://127.0.0.1:5000"
@@ -57,6 +58,7 @@ class AppSettings:
                 os.getenv("OPENPDF2ZH_MANAGE_HYBRID_BACKEND"), default=True
             ),
             base_font_size=float(os.getenv("OPENPDF2ZH_BASE_FONT_SIZE", "10.0")),
+            render_font_path=os.getenv("OPENPDF2ZH_RENDER_FONT_PATH", "").strip(),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
             libretranslate_url=os.getenv(
