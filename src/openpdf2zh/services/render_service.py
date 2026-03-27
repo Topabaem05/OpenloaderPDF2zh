@@ -14,6 +14,11 @@ from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
 
 
 class RenderService:
+    SPECIAL_CHARACTER_PATTERN = re.compile(r"[●•▪◦■□◆◇○◎◉※★☆▶▷◀◁→←↑↓]")
+    SPECIAL_CHARACTER_FONT_STACK = (
+        "'Noto Sans Symbols 2', 'Segoe UI Symbol', 'Apple Symbols', sans-serif"
+    )
+
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
 
@@ -119,25 +124,15 @@ class RenderService:
                         line_height_pt,
                         letter_spacing_em,
                     )
-                    spare_height, scale = page.insert_htmlbox(
-                        rect,
+                    render_rect = self._resolve_render_rect(rect, font_size)
+                    spare_height, scale = self._insert_with_scale_policy(
+                        page,
+                        render_rect,
                         html_block,
-                        css=render_css,
-                        scale_low=0.6,
-                        archive=render_archive,
-                        opacity=1,
-                        overlay=True,
+                        render_css,
+                        render_archive,
+                        font_size,
                     )
-                    if spare_height == -1:
-                        spare_height, scale = page.insert_htmlbox(
-                            rect,
-                            html_block,
-                            css=render_css,
-                            scale_low=0.0,
-                            archive=render_archive,
-                            opacity=1,
-                            overlay=True,
-                        )
                     if spare_height == -1:
                         overflow.append(
                             {
@@ -172,6 +167,51 @@ class RenderService:
         append_run_log(workspace.run_log, "render=artifacts:done")
         return len(overflow)
 
+    def _insert_with_scale_policy(
+        self,
+        page: fitz.Page,
+        rect: fitz.Rect,
+        html_block: str,
+        render_css: str | None,
+        render_archive: fitz.Archive | None,
+        font_size: float,
+    ) -> tuple[float, float]:
+        for scale_low in self._scale_candidates(font_size):
+            spare_height, scale = page.insert_htmlbox(
+                rect,
+                html_block,
+                css=render_css,
+                scale_low=scale_low,
+                archive=render_archive,
+                opacity=1,
+                overlay=True,
+            )
+            if spare_height != -1:
+                return spare_height, scale
+        return -1.0, 0.0
+
+    def _scale_candidates(self, font_size: float) -> list[float]:
+        if font_size >= 16.0:
+            return [1.0, 0.92, 0.82, 0.68, 0.0]
+        if font_size <= 11.5:
+            return [0.92, 0.82, 0.68, 0.0]
+        if font_size <= 16.0:
+            return [0.88, 0.76, 0.62, 0.0]
+        return [0.84, 0.72, 0.58, 0.0]
+
+    def _resolve_render_rect(self, rect: fitz.Rect, font_size: float) -> fitz.Rect:
+        if font_size < 16.0:
+            return rect
+
+        horizontal_padding = min(max(rect.width * 0.035, font_size * 0.2), 18.0)
+        vertical_padding = min(max(rect.height * 0.15, font_size * 0.9), 28.0)
+        return fitz.Rect(
+            rect.x0 - horizontal_padding,
+            rect.y0 - (vertical_padding * 0.3),
+            rect.x1 + horizontal_padding,
+            rect.y1 + vertical_padding,
+        )
+
     def _build_html(
         self,
         text: str,
@@ -183,9 +223,15 @@ class RenderService:
         line_height_pt: float | None,
         letter_spacing_em: float | None,
     ) -> str:
-        safe_text = self._format_translated_text(text, label, estimated_line_count)
-        font_family = render_font_family or self._normalize_font_family(
-            source_font_name
+        safe_text = self._format_translated_text(
+            text,
+            label,
+            estimated_line_count,
+            font_size,
+        )
+        font_family = self._resolve_font_family_css(
+            render_font_family,
+            source_font_name,
         )
         line_height_css = f"{line_height_pt}pt" if line_height_pt is not None else "1.2"
         letter_spacing_css = (
@@ -194,8 +240,8 @@ class RenderService:
             else ""
         )
         return (
-            f"<div style='font-family: {font_family}; font-size: {font_size}pt; "
-            f"line-height: {line_height_css}; color: #111; white-space: pre-wrap; display: block; margin: 0; padding: 0; {letter_spacing_css}'>"
+            f'<div style="font-family: {font_family}; font-size: {font_size}pt; '
+            f'line-height: {line_height_css}; color: #111; white-space: pre-wrap; display: block; margin: 0; padding: 0; {letter_spacing_css}">'
             f"{safe_text}</div>"
         )
 
@@ -219,9 +265,23 @@ class RenderService:
         return css, archive, font_family
 
     def _normalize_font_family(self, source_font_name: str) -> str:
-        if not source_font_name:
+        return self._format_font_family_css(source_font_name)
+
+    def _resolve_font_family_css(
+        self,
+        render_font_family: str | None,
+        source_font_name: str,
+    ) -> str:
+        if render_font_family:
+            resolved = self._format_font_family_css(render_font_family)
+            if resolved != "sans-serif":
+                return resolved
+        return self._format_font_family_css(source_font_name)
+
+    def _format_font_family_css(self, font_name: str) -> str:
+        if not font_name:
             return "sans-serif"
-        safe_name = re.sub(r"[^A-Za-z0-9 _\-]", "", source_font_name).strip()
+        safe_name = re.sub(r"[^A-Za-z0-9 _\-]", "", str(font_name)).strip()
         if not safe_name:
             return "sans-serif"
         return f"'{safe_name}', sans-serif"
@@ -261,9 +321,27 @@ class RenderService:
         text: str,
         label: str,
         estimated_line_count: int,
+        font_size: float,
     ) -> str:
         normalized = text.strip()
-        return html.escape(normalized).replace("\n", "<br/>")
+        lines = normalized.split("\n")
+        return "<br/>".join(
+            self._style_special_characters(line, font_size) for line in lines
+        )
+
+    def _style_special_characters(self, text: str, font_size: float) -> str:
+        escaped = html.escape(text)
+        return self.SPECIAL_CHARACTER_PATTERN.sub(
+            lambda match: (
+                '<span style="'
+                f"font-family: {self.SPECIAL_CHARACTER_FONT_STACK}; "
+                f"font-size: {font_size}pt; "
+                'line-height: inherit; vertical-align: baseline;">'
+                f"{match.group(0)}"
+                "</span>"
+            ),
+            escaped,
+        )
 
     def _uses_paragraph_box(self, label: str) -> bool:
         return label.strip().lower() in {

@@ -127,15 +127,38 @@ def test_render_service_uses_element_font_size_and_custom_font(
     assert len(fake_page.insert_calls) == 1
     call = fake_page.insert_calls[0]
     assert "font-size: 18.5pt" in call["text"]
-    assert "font-family: customrenderfont" in call["text"]
+    assert 'style="font-family: ' in call["text"]
+    assert "font-family: 'customrenderfont', sans-serif" in call["text"]
     assert "line-height: 24.0pt" in call["text"]
     assert "letter-spacing: 0.08em" in call["text"]
     assert "1. Hello<br/>2. World" not in call["text"]
     assert "Hello world again forever" in call["text"]
-    assert call["scale_low"] == 0.6
+    assert call["scale_low"] == 1.0
+    assert call["rect"].x0 < 0
+    assert call["rect"].x1 > 10
+    assert call["rect"].y1 > 10
     assert "@font-face" in call["css"]
     assert call["archive"] is not None
     assert fake_doc.saved_path == str(workspace.translated_pdf)
+
+
+def test_render_service_styles_special_characters_with_explicit_font_size() -> None:
+    service = RenderService(AppSettings())
+
+    html_block = service._build_html(
+        "● Hello",
+        "list item",
+        10.394,
+        None,
+        "ArialMT",
+        1,
+        12.0,
+        None,
+    )
+
+    assert "font-size: 10.394pt" in html_block
+    assert "Noto Sans Symbols 2" in html_block
+    assert ">●</span> Hello" in html_block
 
 
 def test_render_service_sorts_paragraph_boxes_in_reading_order(
@@ -189,8 +212,8 @@ def test_render_service_sorts_paragraph_boxes_in_reading_order(
     )
 
     assert len(fake_page.insert_calls) == 2
-    assert ">top</div>" in fake_page.insert_calls[0]["text"]
-    assert ">bottom</div>" in fake_page.insert_calls[1]["text"]
+    assert '">top</div>' in fake_page.insert_calls[0]["text"]
+    assert '">bottom</div>' in fake_page.insert_calls[1]["text"]
 
 
 def test_render_service_sanitizes_invalid_font_family() -> None:
@@ -198,6 +221,8 @@ def test_render_service_sanitizes_invalid_font_family() -> None:
 
     assert service._normalize_font_family("><") == "sans-serif"
     assert service._normalize_font_family("ArialMT") == "'ArialMT', sans-serif"
+    assert service._resolve_font_family_css("><", "ArialMT") == "'ArialMT', sans-serif"
+    assert service._resolve_font_family_css("><", "><") == "sans-serif"
 
 
 def test_render_service_retries_with_full_shrink_after_initial_overflow(
@@ -227,7 +252,7 @@ def test_render_service_retries_with_full_shrink_after_initial_overflow(
         encoding="utf-8",
     )
     fake_page = _FakePage()
-    fake_page.insert_results = [(-1.0, 1.0), (5.0, 0.42)]
+    fake_page.insert_results = [(-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0), (5.0, 0.42)]
     fake_doc = _FakeDoc(fake_page)
     monkeypatch.setattr(
         "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
@@ -245,6 +270,60 @@ def test_render_service_retries_with_full_shrink_after_initial_overflow(
     )
 
     assert overflow == 0
-    assert len(fake_page.insert_calls) == 2
-    assert fake_page.insert_calls[0]["scale_low"] == 0.6
-    assert fake_page.insert_calls[1]["scale_low"] == 0.0
+    assert len(fake_page.insert_calls) == 4
+    assert [call["scale_low"] for call in fake_page.insert_calls] == [
+        0.88,
+        0.76,
+        0.62,
+        0.0,
+    ]
+
+
+def test_render_service_uses_more_conservative_scale_for_small_fonts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "label": "list item",
+                                "bbox": [0, 0, 10, 10],
+                                "translated": "Compact text",
+                                "font_name": "ArialMT",
+                                "font_size": 10.394,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings())
+    overflow = service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="English",
+            provider="libretranslate",
+            model="libretranslate",
+        ),
+        workspace,
+    )
+
+    assert overflow == 0
+    assert len(fake_page.insert_calls) == 1
+    assert fake_page.insert_calls[0]["scale_low"] == 0.92
+    assert fake_page.insert_calls[0]["rect"].x0 == 0
+    assert fake_page.insert_calls[0]["rect"].y1 == 10
