@@ -59,8 +59,8 @@ def test_translate_document_writes_progress_entries_to_run_log(
         PipelineRequest(
             input_pdf=source_pdf,
             target_language="English",
-            provider="libretranslate",
-            model="libretranslate",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
         ),
         workspace,
     )
@@ -82,7 +82,7 @@ def test_translate_document_writes_progress_entries_to_run_log(
     assert structured["pages"][0]["elements"][2]["content"] == "● beta entry"
     assert structured["pages"][0]["elements"][1]["line_height_pt"] is not None
     log_text = workspace.run_log.read_text(encoding="utf-8")
-    assert "translation=extracted_units total=3 provider=libretranslate" in log_text
+    assert "translation=extracted_units total=3 provider=openrouter" in log_text
     assert "translation=progress current=1/3 page=1 unit_id=u00001" in log_text
     assert "translation=progress current=3/3 page=1 unit_id=u00003" in log_text
     assert "translation=artifacts:done" in log_text
