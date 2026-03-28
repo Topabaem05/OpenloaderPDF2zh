@@ -116,15 +116,14 @@ Follow the order used in `config.py`, `translation_service.py`, and `ui.py`:
 - Prefer explicit, actionable exceptions.
 - Current patterns:
   - `RuntimeError` for missing API keys
-  - `RuntimeError` when the hybrid backend never becomes ready
-  - `ValueError` for unsupported providers
-  - `FileNotFoundError` when expected parser artifacts are missing
+- `ValueError` for unsupported providers
+- `FileNotFoundError` when expected parser artifacts are missing
 - Error messages should say exactly what is missing or what the user should do next.
 - Do not swallow exceptions silently.
 ### Comments and docs
 - Add comments only when behavior is not obvious.
 - Prefer clear names over comment-heavy code.
-- Preserve repo terminology: workspace, parsed output, translation units, render report, hybrid backend.
+- Preserve repo terminology: workspace, parsed output, translation units, and render report.
 ### Configuration
 - Centralize env-derived defaults in `AppSettings.from_env()`.
 - Prefer dataclass defaults over scattered `os.getenv` calls.

@@ -23,13 +23,11 @@ class AppSettings:
     default_provider: str = "openrouter"
     default_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     default_target_language: str = "Simplified Chinese"
-    default_ocr_langs: str = "ko,en,ch_sim"
-    hybrid_backend: str = "docling-fast"
-    hybrid_port: int = 5002
-    hybrid_timeout_ms: int = 120000
-    manage_hybrid_backend: bool = True
+    duplicate_box_iou_threshold: float = 0.85
+    duplicate_box_iom_threshold: float = 0.9
     base_font_size: float = 10.0
     render_font_path: str = ""
+    adjust_render_letter_spacing_for_overlap: bool = True
     ctranslate2_model_dir: str = ""
     ctranslate2_tokenizer_path: str = ""
     openrouter_api_key: str = ""
@@ -53,15 +51,24 @@ class AppSettings:
             default_target_language=os.getenv(
                 "OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE", "Simplified Chinese"
             ),
-            default_ocr_langs=os.getenv("OPENPDF2ZH_DEFAULT_OCR_LANGS", "ko,en,ch_sim"),
-            hybrid_backend=os.getenv("OPENPDF2ZH_HYBRID_BACKEND", "docling-fast"),
-            hybrid_port=int(os.getenv("OPENPDF2ZH_HYBRID_PORT", "5002")),
-            hybrid_timeout_ms=int(os.getenv("OPENPDF2ZH_HYBRID_TIMEOUT_MS", "120000")),
-            manage_hybrid_backend=_as_bool(
-                os.getenv("OPENPDF2ZH_MANAGE_HYBRID_BACKEND"), default=True
+            duplicate_box_iou_threshold=float(
+                os.getenv("OPENPDF2ZH_DUPLICATE_BOX_IOU_THRESHOLD", "0.85")
+            ),
+            duplicate_box_iom_threshold=float(
+                os.getenv(
+                    "OPENPDF2ZH_DUPLICATE_BOX_IOM_THRESHOLD",
+                    os.getenv(
+                        "OPENPDF2ZH_DUPLICATE_BOX_THRESHOLD",
+                        os.getenv("OPENPDF2ZH_BOX_OVERLAP_THRESHOLD", "0.9"),
+                    ),
+                )
             ),
             base_font_size=float(os.getenv("OPENPDF2ZH_BASE_FONT_SIZE", "10.0")),
             render_font_path=os.getenv("OPENPDF2ZH_RENDER_FONT_PATH", "").strip(),
+            adjust_render_letter_spacing_for_overlap=_as_bool(
+                os.getenv("OPENPDF2ZH_ADJUST_RENDER_LETTER_SPACING_FOR_OVERLAP"),
+                default=True,
+            ),
             ctranslate2_model_dir=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", ""
             ).strip(),

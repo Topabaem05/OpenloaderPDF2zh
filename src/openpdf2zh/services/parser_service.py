@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import atexit
 import json
-import os
-import socket
-import subprocess
 import warnings
-import time
 from pathlib import Path
 
 import fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
+from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import (
     append_run_log,
     copy_first_matching,
@@ -20,127 +16,21 @@ from openpdf2zh.utils.files import (
 )
 
 
-class HybridBackendManager:
-    def __init__(self, settings: AppSettings) -> None:
-        self.settings = settings
-        self._process: subprocess.Popen[str] | None = None
-        self._signature: tuple[bool, str] | None = None
-        atexit.register(self.stop)
-
-    def ensure_running(self, *, force_ocr: bool, ocr_langs: str) -> None:
-        if not self.settings.manage_hybrid_backend:
-            return
-
-        signature = (force_ocr, ocr_langs.strip())
-        if (
-            self._process
-            and self._process.poll() is None
-            and self._signature == signature
-        ):
-            return
-
-        self.stop()
-        cmd = [
-            "opendataloader-pdf-hybrid",
-            "--port",
-            str(self.settings.hybrid_port),
-        ]
-        if force_ocr:
-            cmd.append("--force-ocr")
-            if ocr_langs.strip():
-                cmd.extend(["--ocr-lang", ocr_langs.strip()])
-
-        creationflags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
-        )
-        try:
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                creationflags=creationflags,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "Hybrid backend executable 'opendataloader-pdf-hybrid' was not found. "
-                "Install opendataloader-pdf[hybrid], start it manually, or disable managed mode."
-            ) from exc
-
-        self._signature = signature
-        if not wait_for_port(
-            "127.0.0.1", self.settings.hybrid_port, timeout_seconds=30.0
-        ):
-            self.stop()
-            raise RuntimeError(
-                "Hybrid backend did not become ready. Start it manually or disable managed mode."
-            )
-
-    def stop(self) -> None:
-        if not self._process:
-            return
-        if self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-        self._process = None
-        self._signature = None
-
-
-def wait_for_port(host: str, port: int, timeout_seconds: float) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(1.0)
-            try:
-                sock.connect((host, port))
-                return True
-            except OSError:
-                time.sleep(0.5)
-    return False
-
-
 class ParserService:
+    DUPLICATE_BOX_AREA_RATIO_THRESHOLD = 0.8
+
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
-        self.backend = HybridBackendManager(settings)
 
     def parse(
-        self, request: PipelineRequest, workspace: JobWorkspace
+        self, _request: PipelineRequest, workspace: JobWorkspace
     ) -> tuple[Path, Path]:
-        hybrid_backend = self.settings.hybrid_backend
-
-        if request.force_ocr and hybrid_backend == "off":
-            raise RuntimeError(
-                "Force OCR requires a hybrid backend. Set OPENPDF2ZH_HYBRID_BACKEND to docling-fast."
-            )
-
         append_run_log(
             workspace.run_log,
-            f"parser=starting hybrid_backend={hybrid_backend} force_ocr={request.force_ocr}",
+            "parser=starting",
         )
 
         with run_log_heartbeat(workspace.run_log, "parse"):
-            if request.force_ocr:
-                self.backend.ensure_running(force_ocr=True, ocr_langs=request.ocr_langs)
-            elif self.settings.manage_hybrid_backend and hybrid_backend != "off":
-                try:
-                    self.backend.ensure_running(
-                        force_ocr=False, ocr_langs=request.ocr_langs
-                    )
-                except RuntimeError as exc:
-                    hybrid_backend = "off"
-                    warning_message = (
-                        "Hybrid backend is unavailable; falling back to Java-only parsing. "
-                        "Install opendataloader-pdf[hybrid], start it manually, or set OPENPDF2ZH_HYBRID_BACKEND=off."
-                    )
-                    warnings.warn(
-                        f"{warning_message} Detail: {exc}", RuntimeWarning, stacklevel=2
-                    )
-                    append_run_log(workspace.run_log, f"warning={warning_message}")
-
             try:
                 import opendataloader_pdf
             except ModuleNotFoundError as exc:
@@ -149,46 +39,19 @@ class ParserService:
                     "Run 'python -m pip install -e .' from the repository root and try again."
                 ) from exc
 
-            hybrid_fallback = hybrid_backend != "off" and not request.force_ocr
-            hybrid_timeout = None
-            if hybrid_backend != "off" and self.settings.hybrid_timeout_ms > 0:
-                hybrid_timeout = str(self.settings.hybrid_timeout_ms)
             append_run_log(
                 workspace.run_log,
-                "parser=convert "
-                f"hybrid={hybrid_backend} hybrid_fallback={hybrid_fallback} "
-                f"hybrid_timeout_ms={hybrid_timeout or 'off'}",
+                "parser=convert",
             )
             try:
                 opendataloader_pdf.convert(
                     input_path=str(workspace.input_pdf),
                     output_dir=str(workspace.parsed_dir),
                     format="json,markdown",
-                    hybrid=hybrid_backend,
-                    hybrid_url=f"http://127.0.0.1:{self.settings.hybrid_port}",
-                    hybrid_timeout=hybrid_timeout,
-                    hybrid_fallback=hybrid_fallback,
-                )
-            except subprocess.CalledProcessError as exc:
-                if hybrid_backend == "off" or request.force_ocr:
-                    raise RuntimeError(
-                        "OpenDataLoader parsing failed. Check the parser output above for details."
-                    ) from exc
-
-                warning_message = (
-                    "Hybrid parsing failed; retrying with Java-only mode. "
-                    "The document will continue without AI backend enrichment."
-                )
-                warnings.warn(
-                    f"{warning_message} Detail: {exc}", RuntimeWarning, stacklevel=2
-                )
-                append_run_log(workspace.run_log, f"warning={warning_message}")
-                opendataloader_pdf.convert(
-                    input_path=str(workspace.input_pdf),
-                    output_dir=str(workspace.parsed_dir),
-                    format="json,markdown",
                     hybrid="off",
                 )
+            except Exception as exc:
+                raise RuntimeError(f"OpenDataLoader parsing failed: {exc}") from exc
 
             append_run_log(workspace.run_log, "parser=convert:done")
 
@@ -254,6 +117,11 @@ class ParserService:
                             "label": label,
                             "page_number": page_number,
                             "bbox": [float(value) for value in bbox],
+                            "content": (
+                                node.get("content", "").strip()
+                                if isinstance(node.get("content"), str)
+                                else ""
+                            ),
                         }
                     )
                 for value in node.values():
@@ -263,7 +131,102 @@ class ParserService:
                     walk(item)
 
         walk(payload)
-        return entries
+        return self._deduplicate_detected_boxes(entries)
+
+    def _deduplicate_detected_boxes(
+        self, entries: list[dict[str, object]]
+    ) -> list[dict[str, object]]:
+        filtered: list[dict[str, object]] = []
+
+        for entry in entries:
+            candidate = entry
+            overlapping_indexes: list[int] = []
+            for index, existing in enumerate(filtered):
+                if not self._is_duplicate_detected_box(candidate, existing):
+                    continue
+                overlapping_indexes.append(index)
+                candidate = self._prefer_detected_box(existing, candidate)
+
+            if not overlapping_indexes:
+                filtered.append(candidate)
+                continue
+
+            first_index = overlapping_indexes[0]
+            filtered[first_index] = candidate
+            for index in reversed(overlapping_indexes[1:]):
+                filtered.pop(index)
+
+        return filtered
+
+    def _is_duplicate_detected_box(
+        self,
+        entry: dict[str, object],
+        existing: dict[str, object],
+    ) -> bool:
+        if entry["page_number"] != existing["page_number"]:
+            return False
+        if entry["label"] != existing["label"]:
+            return False
+
+        entry_bbox = self._entry_bbox(entry)
+        existing_bbox = self._entry_bbox(existing)
+        area_ratio = bbox_area_ratio(entry_bbox, existing_bbox)
+        if area_ratio < self.DUPLICATE_BOX_AREA_RATIO_THRESHOLD:
+            return False
+
+        if (
+            bbox_iou(entry_bbox, existing_bbox)
+            >= self.settings.duplicate_box_iou_threshold
+        ):
+            return True
+
+        if (
+            bbox_iom(entry_bbox, existing_bbox)
+            < self.settings.duplicate_box_iom_threshold
+        ):
+            return False
+
+        return self._is_duplicate_content(
+            str(entry.get("content", "")),
+            str(existing.get("content", "")),
+        )
+
+    def _prefer_detected_box(
+        self,
+        existing: dict[str, object],
+        candidate: dict[str, object],
+    ) -> dict[str, object]:
+        existing_bbox = self._entry_bbox(existing)
+        candidate_bbox = self._entry_bbox(candidate)
+        existing_area = bbox_area(existing_bbox)
+        candidate_area = bbox_area(candidate_bbox)
+        if candidate_area > existing_area:
+            return candidate
+        if candidate_area < existing_area:
+            return existing
+
+        if len(str(candidate.get("content", ""))) > len(
+            str(existing.get("content", ""))
+        ):
+            return candidate
+        return existing
+
+    def _entry_bbox(self, entry: dict[str, object]) -> list[float]:
+        return [float(value) for value in entry["bbox"]]
+
+    def _is_duplicate_content(self, left: str, right: str) -> bool:
+        normalized_left = self._normalize_content(left)
+        normalized_right = self._normalize_content(right)
+        if not normalized_left or not normalized_right:
+            return True
+        return (
+            normalized_left == normalized_right
+            or normalized_left in normalized_right
+            or normalized_right in normalized_left
+        )
+
+    def _normalize_content(self, value: str) -> str:
+        return " ".join(value.split()).strip().lower()
 
     def _box_color(self, label: str) -> tuple[float, float, float]:
         return {

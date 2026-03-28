@@ -46,7 +46,7 @@ The app should feel calm, linear, and easy to recover from.
 Gradio Blocks UI
     -> PipelineRunner
         -> ParserService
-            -> OpenDataLoader-PDF (+ optional managed hybrid backend subprocess)
+            -> OpenDataLoader-PDF
         -> TranslationService
             -> OpenRouterTranslator or GroqTranslator
         -> RenderService
@@ -58,7 +58,7 @@ Gradio Blocks UI
 - `app.py`: local entrypoint; should stay tiny
 - `src/openpdf2zh/ui.py`: Gradio layout, events, and launch configuration
 - `src/openpdf2zh/pipeline.py`: orchestration only
-- `src/openpdf2zh/services/parser_service.py`: OpenDataLoader integration and optional hybrid backend lifecycle
+- `src/openpdf2zh/services/parser_service.py`: OpenDataLoader integration and parser artifact handling
 - `src/openpdf2zh/services/translation_service.py`: extraction of translatable units and provider calls
 - `src/openpdf2zh/services/render_service.py`: bbox conversion and PDF re-rendering
 - `src/openpdf2zh/providers/*.py`: thin provider-specific wrappers
@@ -83,8 +83,7 @@ Keep these responsibilities separated.
 - Treat OpenDataLoader-PDF as the source of truth for layout and reading order
 - Preserve raw parser outputs under the job workspace
 - Normalize parser output into a stable internal schema saved as `structured.json`
-- Support scanned PDFs through hybrid backend OCR settings
-- Prefer a managed backend subprocess only when it reduces setup friction; keep manual mode possible
+- Keep parsing flow simple and Java-only
 
 ### Translation
 

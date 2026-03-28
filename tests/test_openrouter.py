@@ -2,14 +2,14 @@ import httpx
 import pytest
 from openai import AuthenticationError, RateLimitError
 
-from openpdf2zh.providers.groq import GroqTranslator
+from openpdf2zh.providers.openrouter import OpenRouterTranslator
 
 
-def test_groq_translator_invalid_api_key_is_actionable(monkeypatch) -> None:
+def test_openrouter_translator_invalid_api_key_is_actionable(monkeypatch) -> None:
     class _FakeCompletions:
         def create(self, **kwargs):
             request = httpx.Request(
-                "POST", "https://api.groq.com/openai/v1/chat/completions"
+                "POST", "https://openrouter.ai/api/v1/chat/completions"
             )
             response = httpx.Response(401, request=request)
             raise AuthenticationError(
@@ -21,10 +21,10 @@ def test_groq_translator_invalid_api_key_is_actionable(monkeypatch) -> None:
     class _FakeChat:
         completions = _FakeCompletions()
 
-    translator = GroqTranslator("bad-key")
+    translator = OpenRouterTranslator("bad-key")
     monkeypatch.setattr(translator._client, "chat", _FakeChat())
 
-    with pytest.raises(RuntimeError, match="GROQ_API_KEY is invalid"):
+    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY is invalid"):
         translator.translate(
             "hello",
             target_language="English",
@@ -32,28 +32,33 @@ def test_groq_translator_invalid_api_key_is_actionable(monkeypatch) -> None:
         )
 
 
-def test_groq_translator_rate_limit_is_actionable(monkeypatch) -> None:
+def test_openrouter_translator_rate_limit_is_actionable(monkeypatch) -> None:
     class _FakeCompletions:
         def create(self, **kwargs):
             request = httpx.Request(
-                "POST", "https://api.groq.com/openai/v1/chat/completions"
+                "POST", "https://openrouter.ai/api/v1/chat/completions"
             )
             response = httpx.Response(
-                429, request=request, headers={"retry-after": "5s"}
+                429, request=request, headers={"retry-after": "12s"}
             )
             raise RateLimitError(
                 "rate limited",
                 response=response,
-                body={"metadata": {"raw": "temporarily rate-limited upstream"}},
+                body={
+                    "metadata": {
+                        "provider_name": "Groq",
+                        "raw": "openai/gpt-oss-safeguard-20b is temporarily rate-limited upstream.",
+                    }
+                },
             )
 
     class _FakeChat:
         completions = _FakeCompletions()
 
-    translator = GroqTranslator("key")
+    translator = OpenRouterTranslator("key")
     monkeypatch.setattr(translator._client, "chat", _FakeChat())
 
-    with pytest.raises(RuntimeError, match="Groq rate-limited the model"):
+    with pytest.raises(RuntimeError, match="OpenRouter → upstream Groq rate-limited"):
         translator.translate(
             "hello",
             target_language="English",
@@ -61,7 +66,7 @@ def test_groq_translator_rate_limit_is_actionable(monkeypatch) -> None:
         )
 
 
-def test_groq_translator_requests_newline_preservation(monkeypatch) -> None:
+def test_openrouter_translator_requests_newline_preservation(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _FakeCompletions:
@@ -84,7 +89,7 @@ def test_groq_translator_requests_newline_preservation(monkeypatch) -> None:
     class _FakeChat:
         completions = _FakeCompletions()
 
-    translator = GroqTranslator("key")
+    translator = OpenRouterTranslator("key")
     monkeypatch.setattr(translator._client, "chat", _FakeChat())
 
     translator.translate("line1\nline2", target_language="English", model="demo")

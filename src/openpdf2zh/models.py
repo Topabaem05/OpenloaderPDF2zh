@@ -10,8 +10,6 @@ class PipelineRequest:
     target_language: str
     provider: str
     model: str
-    force_ocr: bool = False
-    ocr_langs: str = "ko,en,ch_sim"
     font_size: float = 10.0
 
 
@@ -27,6 +25,7 @@ class TranslationUnit:
     estimated_line_count: int = 1
     line_height_pt: float | None = None
     letter_spacing_em: float | None = None
+    toc_page_number: str = ""
     translated: str = ""
 
 

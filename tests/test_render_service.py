@@ -161,6 +161,58 @@ def test_render_service_styles_special_characters_with_explicit_font_size() -> N
     assert ">●</span> Hello" in html_block
 
 
+def test_render_service_renders_toc_entry_as_title_leader_and_page(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 0, 120, 12],
+                                "translated": "Introduction",
+                                "toc_page_number": "xv",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                                "line_height_pt": 14.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings())
+    overflow = service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="English",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
+        ),
+        workspace,
+    )
+
+    assert overflow == 0
+    assert len(fake_page.insert_calls) == 3
+    assert "Introduction" in fake_page.insert_calls[0]["text"]
+    assert "xv" in fake_page.insert_calls[1]["text"]
+    assert "." in fake_page.insert_calls[2]["text"]
+
+
 def test_render_service_sorts_paragraph_boxes_in_reading_order(
     monkeypatch,
     tmp_path: Path,
@@ -327,3 +379,111 @@ def test_render_service_uses_more_conservative_scale_for_small_fonts(
     assert fake_page.insert_calls[0]["scale_low"] == 0.92
     assert fake_page.insert_calls[0]["rect"].x0 == 0
     assert fake_page.insert_calls[0]["rect"].y1 == 10
+
+
+def test_render_service_tightens_letter_spacing_for_overlapping_boxes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 0, 100, 30],
+                                "translated": "First block",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                            },
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 24, 100, 54],
+                                "translated": "Second block",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings())
+    service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="English",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
+        ),
+        workspace,
+    )
+
+    assert len(fake_page.insert_calls) == 2
+    assert "letter-spacing: -" in fake_page.insert_calls[1]["text"]
+
+
+def test_render_service_can_disable_overlap_spacing_adjustment(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 0, 100, 30],
+                                "translated": "First block",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                            },
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 24, 100, 54],
+                                "translated": "Second block",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings(adjust_render_letter_spacing_for_overlap=False))
+    service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="English",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
+        ),
+        workspace,
+    )
+
+    assert len(fake_page.insert_calls) == 2
+    assert "letter-spacing:" not in fake_page.insert_calls[1]["text"]

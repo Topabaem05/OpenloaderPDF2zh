@@ -1,5 +1,5 @@
-import sys
 import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -8,7 +8,7 @@ import pytest
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest
-from openpdf2zh.services.parser_service import HybridBackendManager, ParserService
+from openpdf2zh.services.parser_service import ParserService
 from openpdf2zh.utils.files import prepare_workspace
 
 
@@ -38,30 +38,11 @@ class _PreviewDoc:
         self.saved_path = path
 
 
-def test_hybrid_backend_manager_raises_actionable_error_when_binary_missing(
-    monkeypatch,
-) -> None:
-    def fake_popen(*args, **kwargs):
-        raise FileNotFoundError("missing")
-
-    monkeypatch.setattr(
-        "openpdf2zh.services.parser_service.subprocess.Popen", fake_popen
-    )
-
-    manager = HybridBackendManager(AppSettings())
-
-    with pytest.raises(RuntimeError, match=r"opendataloader-pdf\[hybrid\]"):
-        manager.ensure_running(force_ocr=False, ocr_langs="ko,en")
-
-
-def test_parser_service_falls_back_to_java_only_when_backend_missing(
+def test_parser_service_convert_uses_java_only_mode(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    captured: dict[str, str] = {}
-
-    def fake_popen(*args, **kwargs):
-        raise FileNotFoundError("missing")
+    captured: dict[str, object] = {}
 
     def fake_convert(
         *,
@@ -69,18 +50,15 @@ def test_parser_service_falls_back_to_java_only_when_backend_missing(
         output_dir: str,
         format: str,
         hybrid: str,
-        hybrid_url: str | None = None,
-        hybrid_timeout: str | None = None,
-        hybrid_fallback: bool = False,
     ) -> None:
+        captured["input_path"] = input_path
+        captured["output_dir"] = output_dir
+        captured["format"] = format
         captured["hybrid"] = hybrid
         parsed_dir = Path(output_dir)
         (parsed_dir / "result.json").write_text("{}", encoding="utf-8")
         (parsed_dir / "result.md").write_text("# parsed\n", encoding="utf-8")
 
-    monkeypatch.setattr(
-        "openpdf2zh.services.parser_service.subprocess.Popen", fake_popen
-    )
     monkeypatch.setitem(
         sys.modules, "opendataloader_pdf", types.SimpleNamespace(convert=fake_convert)
     )
@@ -94,72 +72,23 @@ def test_parser_service_falls_back_to_java_only_when_backend_missing(
         target_language="English",
         provider="openrouter",
         model="nvidia/nemotron-3-super-120b-a12b:free",
-        force_ocr=False,
-        ocr_langs="ko,en,ch_sim",
     )
 
-    with pytest.warns(RuntimeWarning, match="falling back to Java-only parsing"):
-        parser.parse(request, workspace)
+    parser.parse(request, workspace)
 
+    assert captured["input_path"] == str(workspace.input_pdf)
+    assert captured["output_dir"] == str(workspace.parsed_dir)
+    assert captured["format"] == "json,markdown"
     assert captured["hybrid"] == "off"
-    assert "warning=Hybrid backend is unavailable" in workspace.run_log.read_text(
-        encoding="utf-8"
-    )
 
 
-def test_parser_service_retries_java_only_after_hybrid_convert_failure(
+def test_parser_service_surfaces_convert_failure(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    calls: list[dict[str, object]] = []
+    def fake_convert(**kwargs) -> None:
+        raise subprocess.CalledProcessError(1, ["opendataloader-pdf"])
 
-    class _AliveProcess:
-        def poll(self):
-            return None
-
-        def terminate(self) -> None:
-            return None
-
-        def wait(self, timeout: int) -> None:
-            return None
-
-    def fake_popen(*args, **kwargs):
-        return _AliveProcess()
-
-    def fake_wait_for_port(host: str, port: int, timeout_seconds: float) -> bool:
-        return True
-
-    def fake_convert(
-        *,
-        input_path: str,
-        output_dir: str,
-        format: str,
-        hybrid: str,
-        hybrid_url: str | None = None,
-        hybrid_timeout: str | None = None,
-        hybrid_fallback: bool = False,
-    ) -> None:
-        calls.append(
-            {
-                "hybrid": hybrid,
-                "hybrid_url": hybrid_url,
-                "hybrid_timeout": hybrid_timeout,
-                "hybrid_fallback": hybrid_fallback,
-            }
-        )
-        if hybrid != "off":
-            raise subprocess.CalledProcessError(1, ["opendataloader-pdf"])
-
-        parsed_dir = Path(output_dir)
-        (parsed_dir / "result.json").write_text("{}", encoding="utf-8")
-        (parsed_dir / "result.md").write_text("# parsed\n", encoding="utf-8")
-
-    monkeypatch.setattr(
-        "openpdf2zh.services.parser_service.subprocess.Popen", fake_popen
-    )
-    monkeypatch.setattr(
-        "openpdf2zh.services.parser_service.wait_for_port", fake_wait_for_port
-    )
     monkeypatch.setitem(
         sys.modules, "opendataloader_pdf", types.SimpleNamespace(convert=fake_convert)
     )
@@ -173,58 +102,9 @@ def test_parser_service_retries_java_only_after_hybrid_convert_failure(
         target_language="English",
         provider="openrouter",
         model="nvidia/nemotron-3-super-120b-a12b:free",
-        force_ocr=False,
-        ocr_langs="ko,en,ch_sim",
     )
 
-    with pytest.warns(RuntimeWarning, match="retrying with Java-only mode"):
-        parser.parse(request, workspace)
-
-    assert calls == [
-        {
-            "hybrid": "docling-fast",
-            "hybrid_url": "http://127.0.0.1:5002",
-            "hybrid_timeout": "120000",
-            "hybrid_fallback": True,
-        },
-        {
-            "hybrid": "off",
-            "hybrid_url": None,
-            "hybrid_timeout": None,
-            "hybrid_fallback": False,
-        },
-    ]
-    assert (
-        "warning=Hybrid parsing failed; retrying with Java-only mode."
-        in workspace.run_log.read_text(encoding="utf-8")
-    )
-
-
-def test_parser_service_force_ocr_requires_available_backend(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    def fake_popen(*args, **kwargs):
-        raise FileNotFoundError("missing")
-
-    monkeypatch.setattr(
-        "openpdf2zh.services.parser_service.subprocess.Popen", fake_popen
-    )
-
-    source_pdf = tmp_path / "sample.pdf"
-    source_pdf.write_text("fake pdf", encoding="utf-8")
-    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
-    parser = ParserService(AppSettings())
-    request = PipelineRequest(
-        input_pdf=source_pdf,
-        target_language="English",
-        provider="openrouter",
-        model="nvidia/nemotron-3-super-120b-a12b:free",
-        force_ocr=True,
-        ocr_langs="ko,en,ch_sim",
-    )
-
-    with pytest.raises(RuntimeError, match=r"opendataloader-pdf\[hybrid\]"):
+    with pytest.raises(RuntimeError, match="OpenDataLoader parsing failed"):
         parser.parse(request, workspace)
 
 
@@ -251,4 +131,82 @@ def test_build_detected_boxes_preview_creates_overlay_pdf(
 
     assert output_path == workspace.detected_boxes_pdf
     assert preview_doc.saved_path == str(workspace.detected_boxes_pdf)
+    assert len(preview_doc.pages[0].rectangles) == 2
+
+
+def test_build_detected_boxes_preview_deduplicates_near_identical_boxes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "sample.pdf"
+    source_pdf.write_text("fake pdf", encoding="utf-8")
+    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
+    workspace.raw_json.write_text(
+        '{"pages": [{"page": 1, "items": ['
+        '{"type": "paragraph", "page": 1, "bbox": [0, 0, 12, 12], "content": "hello world"},'
+        '{"type": "paragraph", "page": 1, "bbox": [0.4, 0.4, 11.8, 11.8], "content": "hello"},'
+        '{"type": "heading", "page": 1, "bbox": [20, 20, 30, 30], "content": "title"}]}]}',
+        encoding="utf-8",
+    )
+    preview_doc = _PreviewDoc()
+    monkeypatch.setattr(
+        "openpdf2zh.services.parser_service.fitz.open", lambda _: preview_doc
+    )
+
+    parser = ParserService(AppSettings())
+    parser._build_detected_boxes_preview(workspace)
+
+    assert len(preview_doc.pages[0].rectangles) == 2
+
+
+def test_build_detected_boxes_preview_respects_duplicate_thresholds(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "sample.pdf"
+    source_pdf.write_text("fake pdf", encoding="utf-8")
+    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
+    workspace.raw_json.write_text(
+        '{"pages": [{"page": 1, "items": ['
+        '{"type": "paragraph", "page": 1, "bbox": [0, 0, 12, 12], "content": "hello world"},'
+        '{"type": "paragraph", "page": 1, "bbox": [0.3, 0.3, 12.3, 12.3], "content": "hello"}]}]}',
+        encoding="utf-8",
+    )
+    preview_doc = _PreviewDoc()
+    monkeypatch.setattr(
+        "openpdf2zh.services.parser_service.fitz.open", lambda _: preview_doc
+    )
+
+    parser = ParserService(
+        AppSettings(
+            duplicate_box_iou_threshold=0.995,
+            duplicate_box_iom_threshold=0.995,
+        )
+    )
+    parser._build_detected_boxes_preview(workspace)
+
+    assert len(preview_doc.pages[0].rectangles) == 2
+
+
+def test_build_detected_boxes_preview_keeps_nested_boxes_with_different_scale(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "sample.pdf"
+    source_pdf.write_text("fake pdf", encoding="utf-8")
+    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
+    workspace.raw_json.write_text(
+        '{"pages": [{"page": 1, "items": ['
+        '{"type": "paragraph", "page": 1, "bbox": [0, 0, 30, 30], "content": "hello world"},'
+        '{"type": "paragraph", "page": 1, "bbox": [5, 5, 15, 15], "content": "hello world"}]}]}',
+        encoding="utf-8",
+    )
+    preview_doc = _PreviewDoc()
+    monkeypatch.setattr(
+        "openpdf2zh.services.parser_service.fitz.open", lambda _: preview_doc
+    )
+
+    parser = ParserService(AppSettings())
+    parser._build_detected_boxes_preview(workspace)
+
     assert len(preview_doc.pages[0].rectangles) == 2

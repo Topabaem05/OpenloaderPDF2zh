@@ -70,7 +70,15 @@ class RenderService:
                 )
                 planned: list[
                     tuple[
-                        fitz.Rect, str, str, float, str, int, float | None, float | None
+                        fitz.Rect,
+                        str,
+                        str,
+                        float,
+                        str,
+                        int,
+                        float | None,
+                        float | None,
+                        str,
                     ]
                 ] = []
                 for element in elements:
@@ -85,6 +93,7 @@ class RenderService:
                     estimated_line_count = self._resolve_estimated_line_count(element)
                     line_height_pt = self._resolve_line_height_pt(element, font_size)
                     letter_spacing_em = self._resolve_letter_spacing_em(element)
+                    toc_page_number = str(element.get("toc_page_number", "")).strip()
                     planned.append(
                         (
                             rect,
@@ -95,11 +104,14 @@ class RenderService:
                             estimated_line_count,
                             line_height_pt,
                             letter_spacing_em,
+                            toc_page_number,
                         )
                     )
 
+                planned = self._apply_overlap_aware_letter_spacing(planned)
+
                 current_state["planned"] = len(planned)
-                for rect, _, _, _, _, _, _, _ in planned:
+                for rect, _, _, _, _, _, _, _, _ in planned:
                     page.add_redact_annot(rect, fill=(1, 1, 1))
                 if planned:
                     page.apply_redactions()
@@ -113,26 +125,41 @@ class RenderService:
                     estimated_line_count,
                     line_height_pt,
                     letter_spacing_em,
+                    toc_page_number,
                 ) in planned:
-                    html_block = self._build_html(
-                        translated,
-                        label,
-                        font_size,
-                        render_font_family,
-                        font_name,
-                        estimated_line_count,
-                        line_height_pt,
-                        letter_spacing_em,
-                    )
-                    render_rect = self._resolve_render_rect(rect, font_size)
-                    spare_height, scale = self._insert_with_scale_policy(
-                        page,
-                        render_rect,
-                        html_block,
-                        render_css,
-                        render_archive,
-                        font_size,
-                    )
+                    if toc_page_number:
+                        spare_height, scale = self._render_toc_entry(
+                            page,
+                            rect,
+                            translated,
+                            toc_page_number,
+                            font_size,
+                            render_font_family,
+                            font_name,
+                            render_css,
+                            render_archive,
+                            line_height_pt,
+                        )
+                    else:
+                        html_block = self._build_html(
+                            translated,
+                            label,
+                            font_size,
+                            render_font_family,
+                            font_name,
+                            estimated_line_count,
+                            line_height_pt,
+                            letter_spacing_em,
+                        )
+                        render_rect = self._resolve_render_rect(rect, font_size)
+                        spare_height, scale = self._insert_with_scale_policy(
+                            page,
+                            render_rect,
+                            html_block,
+                            render_css,
+                            render_archive,
+                            font_size,
+                        )
                     if spare_height == -1:
                         overflow.append(
                             {
@@ -167,6 +194,95 @@ class RenderService:
         append_run_log(workspace.run_log, "render=artifacts:done")
         return len(overflow)
 
+    def _render_toc_entry(
+        self,
+        page: fitz.Page,
+        rect: fitz.Rect,
+        title: str,
+        page_number: str,
+        font_size: float,
+        render_font_family: str | None,
+        source_font_name: str,
+        render_css: str | None,
+        render_archive: fitz.Archive | None,
+        line_height_pt: float | None,
+    ) -> tuple[float, float]:
+        page_width = min(max(font_size * 3.2, rect.width * 0.14), rect.width * 0.24)
+        leader_width = min(max(font_size * 6.0, rect.width * 0.18), rect.width * 0.34)
+        title_rect = fitz.Rect(
+            rect.x0,
+            rect.y0,
+            rect.x1 - page_width - leader_width,
+            rect.y1,
+        )
+        page_rect = fitz.Rect(rect.x1 - page_width, rect.y0, rect.x1, rect.y1)
+        leader_rect = fitz.Rect(title_rect.x1, rect.y0, page_rect.x0, rect.y1)
+
+        title_html = self._build_html(
+            title,
+            "paragraph",
+            font_size,
+            render_font_family,
+            source_font_name,
+            1,
+            line_height_pt,
+            None,
+        )
+        title_spare, title_scale = self._insert_with_scale_policy(
+            page,
+            title_rect,
+            title_html,
+            render_css,
+            render_archive,
+            font_size,
+        )
+
+        page_html = self._build_html(
+            page_number,
+            "paragraph",
+            font_size,
+            render_font_family,
+            source_font_name,
+            1,
+            line_height_pt,
+            None,
+        )
+        page_spare, page_scale = self._insert_with_scale_policy(
+            page,
+            page_rect,
+            page_html,
+            render_css,
+            render_archive,
+            font_size,
+        )
+
+        if leader_rect.width > font_size:
+            leader_html = self._build_html(
+                self._build_toc_leader_text(leader_rect.width, font_size),
+                "paragraph",
+                font_size,
+                render_font_family,
+                source_font_name,
+                1,
+                line_height_pt,
+                0.05,
+            )
+            self._insert_with_scale_policy(
+                page,
+                leader_rect,
+                leader_html,
+                render_css,
+                render_archive,
+                font_size,
+            )
+
+        spare_height = -1.0 if title_spare == -1 or page_spare == -1 else 0.0
+        return spare_height, min(title_scale, page_scale)
+
+    def _build_toc_leader_text(self, width: float, font_size: float) -> str:
+        leader_count = max(int(width / max(font_size * 0.42, 1.0)), 4)
+        return "." * leader_count
+
     def _insert_with_scale_policy(
         self,
         page: fitz.Page,
@@ -189,6 +305,150 @@ class RenderService:
             if spare_height != -1:
                 return spare_height, scale
         return -1.0, 0.0
+
+    def _apply_overlap_aware_letter_spacing(
+        self,
+        planned: list[
+            tuple[
+                fitz.Rect,
+                str,
+                str,
+                float,
+                str,
+                int,
+                float | None,
+                float | None,
+                str,
+            ]
+        ],
+    ) -> list[
+        tuple[
+            fitz.Rect,
+            str,
+            str,
+            float,
+            str,
+            int,
+            float | None,
+            float | None,
+            str,
+        ]
+    ]:
+        if not self.settings.adjust_render_letter_spacing_for_overlap:
+            return planned
+
+        adjusted: list[
+            tuple[
+                fitz.Rect,
+                str,
+                str,
+                float,
+                str,
+                int,
+                float | None,
+                float | None,
+                str,
+            ]
+        ] = []
+        committed_rects: list[fitz.Rect] = []
+
+        for item in planned:
+            (
+                rect,
+                translated,
+                label,
+                font_size,
+                font_name,
+                estimated_line_count,
+                line_height_pt,
+                letter_spacing_em,
+                toc_page_number,
+            ) = item
+
+            adjusted_letter_spacing = letter_spacing_em
+            candidate_rect = self._resolve_render_rect(rect, font_size)
+            if not toc_page_number and self._uses_paragraph_box(label):
+                overlap_penalty = self._resolve_overlap_letter_spacing_penalty(
+                    candidate_rect,
+                    committed_rects,
+                )
+                if overlap_penalty is not None:
+                    adjusted_letter_spacing = self._combine_letter_spacing(
+                        letter_spacing_em,
+                        overlap_penalty,
+                    )
+
+            adjusted.append(
+                (
+                    rect,
+                    translated,
+                    label,
+                    font_size,
+                    font_name,
+                    estimated_line_count,
+                    line_height_pt,
+                    adjusted_letter_spacing,
+                    toc_page_number,
+                )
+            )
+            committed_rects.append(candidate_rect)
+
+        return adjusted
+
+    def _resolve_overlap_letter_spacing_penalty(
+        self,
+        rect: fitz.Rect,
+        previous_rects: list[fitz.Rect],
+    ) -> float | None:
+        strongest_penalty = 0.0
+
+        for previous in previous_rects:
+            horizontal_overlap = min(rect.x1, previous.x1) - max(rect.x0, previous.x0)
+            if horizontal_overlap <= 0:
+                continue
+
+            narrower_width = max(min(rect.width, previous.width), 1.0)
+            horizontal_overlap_ratio = horizontal_overlap / narrower_width
+            if horizontal_overlap_ratio < 0.2:
+                continue
+
+            vertical_overlap = min(rect.y1, previous.y1) - max(rect.y0, previous.y0)
+            if vertical_overlap > 0:
+                overlap_ratio = vertical_overlap / max(
+                    min(rect.height, previous.height),
+                    1.0,
+                )
+                strongest_penalty = max(
+                    strongest_penalty,
+                    min(0.22, 0.05 + (overlap_ratio * 0.16)),
+                )
+                continue
+
+            vertical_gap = max(rect.y0, previous.y0) - min(rect.y1, previous.y1)
+            max_safe_gap = max(min(rect.height, previous.height) * 0.32, 4.0)
+            if vertical_gap < 0 or vertical_gap > max_safe_gap:
+                continue
+
+            gap_ratio = 1.0 - (vertical_gap / max_safe_gap)
+            strongest_penalty = max(
+                strongest_penalty,
+                min(0.16, 0.04 + (gap_ratio * 0.1)),
+            )
+
+        if strongest_penalty <= 0:
+            return None
+        return -round(strongest_penalty, 3)
+
+    def _combine_letter_spacing(
+        self,
+        base_letter_spacing_em: float | None,
+        adjustment_em: float,
+    ) -> float | None:
+        adjusted = (base_letter_spacing_em or 0.0) + adjustment_em
+        adjusted = min(max(adjusted, -0.22), 0.12)
+        if abs(adjusted) < 0.005:
+            return None
+        return round(adjusted, 3)
 
     def _scale_candidates(self, font_size: float) -> list[float]:
         if font_size >= 16.0:

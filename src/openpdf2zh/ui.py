@@ -49,26 +49,6 @@ TARGET_LANGUAGE_CHOICES = [
 
 CTRANSLATE2_TARGET_LANGUAGE_CHOICES = ["English", "Korean"]
 
-OCR_LANGUAGE_CHOICES = [
-    ("Korean", "ko"),
-    ("English", "en"),
-    ("Chinese (Simplified)", "ch_sim"),
-    ("Chinese (Traditional)", "ch_tra"),
-    ("Japanese", "ja"),
-    ("French", "fr"),
-    ("German", "de"),
-    ("Spanish", "es"),
-    ("Italian", "it"),
-]
-
-
-def _parse_ocr_langs(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _serialize_ocr_langs(values: list[str]) -> str:
-    return ",".join(value.strip() for value in values if value.strip())
-
 
 def _build_runtime_settings(
     settings: AppSettings,
@@ -76,6 +56,7 @@ def _build_runtime_settings(
     ctranslate2_model_dir: str,
     ctranslate2_tokenizer_path: str,
     render_font_file: str | None,
+    adjust_render_letter_spacing_for_overlap: bool,
 ) -> AppSettings:
     return replace(
         settings,
@@ -92,7 +73,34 @@ def _build_runtime_settings(
         render_font_path=(
             render_font_file.strip() if render_font_file else settings.render_font_path
         ),
+        adjust_render_letter_spacing_for_overlap=(
+            adjust_render_letter_spacing_for_overlap
+        ),
     )
+
+
+def _normalize_target_language_for_provider(
+    provider: str,
+    target_language: str,
+) -> str:
+    if provider == "ctranslate2":
+        if target_language in CTRANSLATE2_TARGET_LANGUAGE_CHOICES:
+            return target_language
+        return "English"
+    return target_language
+
+
+def _target_language_update_for_provider(
+    provider: str,
+    target_language: str,
+):
+    normalized = _normalize_target_language_for_provider(provider, target_language)
+    if provider == "ctranslate2":
+        return gr.update(
+            choices=CTRANSLATE2_TARGET_LANGUAGE_CHOICES,
+            value=normalized,
+        )
+    return gr.update(choices=TARGET_LANGUAGE_CHOICES, value=normalized)
 
 
 def _build_pdf_preview(path: Path | None, empty_message: str, title: str) -> str:
@@ -109,6 +117,17 @@ def _build_pdf_preview(path: Path | None, empty_message: str, title: str) -> str
         f"<iframe src='{pdf_url}#toolbar=1&navpanes=0' title='{title}'></iframe>"
         "</div>"
     )
+
+
+def _run_pipeline_or_raise_gradio(
+    runner: PipelineRunner,
+    request: PipelineRequest,
+    progress: gr.Progress | None = None,
+):
+    try:
+        return runner.run(request, progress=progress)
+    except RuntimeError as exc:
+        raise gr.Error(str(exc)) from exc
 
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
@@ -158,18 +177,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                     value=default_model_for_provider(default_provider),
                     placeholder="Example: nvidia/nemotron-3-super-120b-a12b:free or auto",
                 )
-                force_ocr = gr.Checkbox(
-                    label="Force OCR on hybrid backend",
-                    value=False,
-                )
-                with gr.Accordion("OCR language options", open=False):
-                    ocr_langs = gr.CheckboxGroup(
-                        label="OCR languages",
-                        choices=OCR_LANGUAGE_CHOICES,
-                        value=_parse_ocr_langs(settings.default_ocr_langs),
-                        show_select_all=True,
-                        info="Select one or more OCR languages for scanned PDFs.",
-                    )
                 with gr.Accordion("Render options", open=False):
                     ctranslate2_model_dir = gr.Textbox(
                         label="CTranslate2 model directory",
@@ -190,6 +197,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         type="filepath",
                         interactive=True,
                     )
+                    adjust_render_letter_spacing_for_overlap = gr.Checkbox(
+                        label="Tighten letter spacing when render boxes overlap",
+                        value=settings.adjust_render_letter_spacing_for_overlap,
+                        info="When nearby translated boxes overlap or nearly collide, compress letter spacing before shrinking the text.",
+                    )
                     gr.Markdown(
                         """
                         <div class="hint">
@@ -203,7 +215,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 gr.Markdown(
                     """
                     <div class="hint">
-                    Use <code>force OCR</code> for scanned or image-only PDFs.
                     Keep the model field editable so provider/model choices can change without code changes.
                     CTranslate2 uses either a local multilingual model plus tokenizer, or a directional quickmt model root with separate source and target tokenizers.
                     If a render font file is uploaded, translated text is rendered with that TTF/TTC/OTF resource.
@@ -247,24 +258,20 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             target_language: str,
             provider: str,
             model: str,
-            force_ocr: bool,
-            ocr_langs: list[str],
             ctranslate2_model_dir: str,
             ctranslate2_tokenizer_path: str,
             render_font_file: str | None,
+            adjust_render_letter_spacing_for_overlap: bool,
             progress: gr.Progress = gr.Progress(track_tqdm=False),
         ) -> tuple[list[str], str, str, str]:
             if not input_pdf:
                 raise gr.Error("Please upload a PDF file first.")
-            if (
-                provider == "ctranslate2"
-                and target_language not in CTRANSLATE2_TARGET_LANGUAGE_CHOICES
-            ):
-                raise gr.Error(
-                    "CTranslate2 currently supports only English and Korean targets in this local setup."
-                )
 
-            serialized_ocr_langs = _serialize_ocr_langs(ocr_langs)
+            target_language = _normalize_target_language_for_provider(
+                provider,
+                target_language,
+            )
+
             normalized_model = model.strip() or default_model_for_provider(provider)
             runner_settings = _build_runtime_settings(
                 settings,
@@ -272,6 +279,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 ctranslate2_model_dir,
                 ctranslate2_tokenizer_path,
                 render_font_file,
+                adjust_render_letter_spacing_for_overlap,
             )
             runner = PipelineRunner(runner_settings)
 
@@ -280,11 +288,13 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 target_language=target_language,
                 provider=provider,
                 model=normalized_model,
-                force_ocr=force_ocr,
-                ocr_langs=serialized_ocr_langs,
                 font_size=settings.base_font_size,
             )
-            result = runner.run(request, progress=progress)
+            result = _run_pipeline_or_raise_gradio(
+                runner,
+                request,
+                progress=progress,
+            )
             return (
                 result.generated_files(),
                 str(result.workspace_dir),
@@ -300,19 +310,24 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 ),
             )
 
-        def sync_model(selected_provider: str, current_model: str) -> str:
-            return default_model_for_provider(selected_provider)
+        def sync_provider_state(selected_provider: str, current_target_language: str):
+            return (
+                default_model_for_provider(selected_provider),
+                _target_language_update_for_provider(
+                    selected_provider,
+                    current_target_language,
+                ),
+            )
 
         def reset_form() -> tuple[
             None,
             str,
             str,
             str,
-            bool,
-            list[str],
             str,
             str,
             None,
+            bool,
             None,
             str,
             str,
@@ -323,11 +338,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 settings.default_target_language,
                 default_provider,
                 default_model_for_provider(default_provider),
-                False,
-                _parse_ocr_langs(settings.default_ocr_langs),
                 settings.ctranslate2_model_dir,
                 settings.ctranslate2_tokenizer_path,
                 None,
+                settings.adjust_render_letter_spacing_for_overlap,
                 None,
                 "",
                 _build_pdf_preview(
@@ -343,9 +357,9 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             )
 
         provider.change(
-            fn=sync_model,
-            inputs=[provider, model],
-            outputs=model,
+            fn=sync_provider_state,
+            inputs=[provider, target_language],
+            outputs=[model, target_language],
             concurrency_limit=1,
         )
 
@@ -356,11 +370,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 target_language,
                 provider,
                 model,
-                force_ocr,
-                ocr_langs,
                 ctranslate2_model_dir,
                 ctranslate2_tokenizer_path,
                 render_font_file,
+                adjust_render_letter_spacing_for_overlap,
             ],
             outputs=[
                 generated_files,
@@ -377,11 +390,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 target_language,
                 provider,
                 model,
-                force_ocr,
-                ocr_langs,
                 ctranslate2_model_dir,
                 ctranslate2_tokenizer_path,
                 render_font_file,
+                adjust_render_letter_spacing_for_overlap,
                 generated_files,
                 workspace_path,
                 translated_pdf_preview,
