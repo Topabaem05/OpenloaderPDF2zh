@@ -37,6 +37,14 @@ CSS = """
   padding: 24px;
   text-align: center;
 }
+.compact-action-row {
+  gap: 8px;
+}
+.compact-action-btn {
+  min-width: 0 !important;
+  padding: 6px 12px !important;
+  font-size: 0.9rem !important;
+}
 """
 
 TARGET_LANGUAGE_CHOICES = [
@@ -210,8 +218,20 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         </div>
                         """
                     )
-                run_btn = gr.Button("Run translation", variant="primary")
-                clear_btn = gr.Button("Reset")
+                with gr.Row(elem_classes=["compact-action-row"]):
+                    run_btn = gr.Button(
+                        "Run translation",
+                        variant="primary",
+                        scale=0,
+                        min_width=140,
+                        elem_classes=["compact-action-btn"],
+                    )
+                    clear_btn = gr.Button(
+                        "Reset",
+                        scale=0,
+                        min_width=84,
+                        elem_classes=["compact-action-btn"],
+                    )
                 gr.Markdown(
                     """
                     <div class="hint">
