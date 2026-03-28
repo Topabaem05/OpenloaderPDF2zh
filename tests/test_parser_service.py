@@ -92,8 +92,8 @@ def test_parser_service_falls_back_to_java_only_when_backend_missing(
     request = PipelineRequest(
         input_pdf=source_pdf,
         target_language="English",
-        provider="libretranslate",
-        model="libretranslate",
+        provider="openrouter",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
         force_ocr=False,
         ocr_langs="ko,en,ch_sim",
     )
@@ -171,8 +171,8 @@ def test_parser_service_retries_java_only_after_hybrid_convert_failure(
     request = PipelineRequest(
         input_pdf=source_pdf,
         target_language="English",
-        provider="libretranslate",
-        model="libretranslate",
+        provider="openrouter",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
         force_ocr=False,
         ocr_langs="ko,en,ch_sim",
     )
@@ -218,8 +218,8 @@ def test_parser_service_force_ocr_requires_available_backend(
     request = PipelineRequest(
         input_pdf=source_pdf,
         target_language="English",
-        provider="libretranslate",
-        model="libretranslate",
+        provider="openrouter",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
         force_ocr=True,
         ocr_langs="ko,en,ch_sim",
     )

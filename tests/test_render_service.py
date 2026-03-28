@@ -115,8 +115,8 @@ def test_render_service_uses_element_font_size_and_custom_font(
         PipelineRequest(
             input_pdf=workspace.input_pdf,
             target_language="English",
-            provider="libretranslate",
-            model="libretranslate",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
             font_size=10.0,
         ),
         workspace,
@@ -205,8 +205,8 @@ def test_render_service_sorts_paragraph_boxes_in_reading_order(
         PipelineRequest(
             input_pdf=workspace.input_pdf,
             target_language="English",
-            provider="libretranslate",
-            model="libretranslate",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
         ),
         workspace,
     )
@@ -263,8 +263,8 @@ def test_render_service_retries_with_full_shrink_after_initial_overflow(
         PipelineRequest(
             input_pdf=workspace.input_pdf,
             target_language="English",
-            provider="libretranslate",
-            model="libretranslate",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
         ),
         workspace,
     )
@@ -316,8 +316,8 @@ def test_render_service_uses_more_conservative_scale_for_small_fonts(
         PipelineRequest(
             input_pdf=workspace.input_pdf,
             target_language="English",
-            provider="libretranslate",
-            model="libretranslate",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
         ),
         workspace,
     )
