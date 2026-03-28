@@ -30,10 +30,10 @@ class AppSettings:
     manage_hybrid_backend: bool = True
     base_font_size: float = 10.0
     render_font_path: str = ""
+    ctranslate2_model_dir: str = ""
+    ctranslate2_tokenizer_path: str = ""
     openrouter_api_key: str = ""
     groq_api_key: str = ""
-    libretranslate_url: str = "http://127.0.0.1:5000"
-    libretranslate_api_key: str = ""
     openrouter_app_name: str = "OpenPDF2ZH"
     openrouter_app_url: str = ""
 
@@ -62,12 +62,14 @@ class AppSettings:
             ),
             base_font_size=float(os.getenv("OPENPDF2ZH_BASE_FONT_SIZE", "10.0")),
             render_font_path=os.getenv("OPENPDF2ZH_RENDER_FONT_PATH", "").strip(),
+            ctranslate2_model_dir=os.getenv(
+                "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", ""
+            ).strip(),
+            ctranslate2_tokenizer_path=os.getenv(
+                "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH", ""
+            ).strip(),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
-            libretranslate_url=os.getenv(
-                "OPENPDF2ZH_LIBRETRANSLATE_URL", "http://127.0.0.1:5000"
-            ).strip(),
-            libretranslate_api_key=os.getenv("LIBRETRANSLATE_API_KEY", "").strip(),
             openrouter_app_name=os.getenv(
                 "OPENPDF2ZH_OPENROUTER_APP_NAME", "OpenPDF2ZH"
             ),
