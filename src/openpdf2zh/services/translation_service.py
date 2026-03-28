@@ -9,8 +9,8 @@ from typing import Any, Iterable
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest, TranslationUnit
 from openpdf2zh.providers.base import BaseTranslator
+from openpdf2zh.providers.ctranslate2 import CTranslate2Translator
 from openpdf2zh.providers.groq import GroqTranslator
-from openpdf2zh.providers.libretranslate import LibreTranslateTranslator
 from openpdf2zh.providers.openrouter import OpenRouterTranslator
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
 
@@ -112,17 +112,17 @@ class TranslationService:
                 app_name=self.settings.openrouter_app_name,
                 app_url=self.settings.openrouter_app_url,
             )
+        if provider_key == "ctranslate2":
+            if not self.settings.ctranslate2_model_dir:
+                raise RuntimeError("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR is missing.")
+            return CTranslate2Translator(
+                self.settings.ctranslate2_model_dir,
+                self.settings.ctranslate2_tokenizer_path,
+            )
         if provider_key == "groq":
             if not self.settings.groq_api_key:
                 raise RuntimeError("GROQ_API_KEY is missing.")
             return GroqTranslator(self.settings.groq_api_key)
-        if provider_key == "libretranslate":
-            if not self.settings.libretranslate_url:
-                raise RuntimeError("OPENPDF2ZH_LIBRETRANSLATE_URL is missing.")
-            return LibreTranslateTranslator(
-                self.settings.libretranslate_url,
-                api_key=self.settings.libretranslate_api_key,
-            )
         raise ValueError(f"Unsupported provider: {provider}")
 
     def _extract_units(self, payload: Any) -> list[TranslationUnit]:
