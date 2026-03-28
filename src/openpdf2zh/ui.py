@@ -47,6 +47,8 @@ TARGET_LANGUAGE_CHOICES = [
     "Korean",
 ]
 
+CTRANSLATE2_TARGET_LANGUAGE_CHOICES = ["English", "Korean"]
+
 OCR_LANGUAGE_CHOICES = [
     ("Korean", "ko"),
     ("English", "en"),
@@ -71,20 +73,22 @@ def _serialize_ocr_langs(values: list[str]) -> str:
 def _build_runtime_settings(
     settings: AppSettings,
     provider: str,
-    libretranslate_url: str,
-    libretranslate_api_key: str,
+    ctranslate2_model_dir: str,
+    ctranslate2_tokenizer_path: str,
     render_font_file: str | None,
 ) -> AppSettings:
-    normalized_url = settings.libretranslate_url
-    if provider == "libretranslate":
-        normalized_url = libretranslate_url.strip().rstrip("/")
-        if not normalized_url:
-            raise gr.Error("Please enter a LibreTranslate server URL.")
-
     return replace(
         settings,
-        libretranslate_url=normalized_url,
-        libretranslate_api_key=libretranslate_api_key.strip(),
+        ctranslate2_model_dir=(
+            ctranslate2_model_dir.strip()
+            if provider == "ctranslate2"
+            else settings.ctranslate2_model_dir
+        ),
+        ctranslate2_tokenizer_path=(
+            ctranslate2_tokenizer_path.strip()
+            if provider == "ctranslate2"
+            else settings.ctranslate2_tokenizer_path
+        ),
         render_font_path=(
             render_font_file.strip() if render_font_file else settings.render_font_path
         ),
@@ -109,7 +113,7 @@ def _build_pdf_preview(path: Path | None, empty_message: str, title: str) -> str
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     settings = settings or AppSettings.from_env()
-    provider_choices = ["openrouter", "libretranslate"]
+    provider_choices = ["openrouter", "ctranslate2"]
     default_provider = (
         settings.default_provider
         if settings.default_provider in provider_choices
@@ -117,8 +121,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     )
 
     def default_model_for_provider(selected_provider: str) -> str:
-        if selected_provider == "libretranslate":
-            return "libretranslate"
+        if selected_provider == "ctranslate2":
+            return "auto"
         return settings.default_model
 
     with gr.Blocks() as demo:
@@ -152,7 +156,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 model = gr.Textbox(
                     label="Model ID",
                     value=default_model_for_provider(default_provider),
-                    placeholder="Example: openrouter/auto or libretranslate",
+                    placeholder="Example: nvidia/nemotron-3-super-120b-a12b:free or auto",
                 )
                 force_ocr = gr.Checkbox(
                     label="Force OCR on hybrid backend",
@@ -166,20 +170,19 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         show_select_all=True,
                         info="Select one or more OCR languages for scanned PDFs.",
                     )
-                with gr.Accordion("LibreTranslate server", open=False):
-                    libretranslate_url = gr.Textbox(
-                        label="LibreTranslate base URL",
-                        value=settings.libretranslate_url,
-                        placeholder="http://127.0.0.1:5000",
-                        info="Used only when the provider is LibreTranslate. Self-hosted instances usually do not require an API key.",
-                    )
-                    libretranslate_api_key = gr.Textbox(
-                        label="LibreTranslate API key (optional)",
-                        value=settings.libretranslate_api_key,
-                        type="password",
-                        info="Leave blank for self-hosted LibreTranslate servers unless you configured API keys.",
-                    )
                 with gr.Accordion("Render options", open=False):
+                    ctranslate2_model_dir = gr.Textbox(
+                        label="CTranslate2 model directory",
+                        value=settings.ctranslate2_model_dir,
+                        placeholder="/absolute/path/to/ctranslate2_models or /absolute/path/to/ctranslate2_model",
+                        info="Used only when the provider is CTranslate2. You can point this to a single multilingual model directory or a root folder containing quickmt-ko-en and quickmt-en-ko subdirectories.",
+                    )
+                    ctranslate2_tokenizer_path = gr.Textbox(
+                        label="CTranslate2 tokenizer model",
+                        value=settings.ctranslate2_tokenizer_path,
+                        placeholder="/absolute/path/to/tokenizer.model",
+                        info="SentencePiece tokenizer model used with single multilingual CTranslate2 models. Leave blank when using directional quickmt-ko-en and quickmt-en-ko subdirectories.",
+                    )
                     render_font_file = gr.File(
                         label="Custom render font file (optional)",
                         file_count="single",
@@ -202,7 +205,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                     <div class="hint">
                     Use <code>force OCR</code> for scanned or image-only PDFs.
                     Keep the model field editable so provider/model choices can change without code changes.
-                    LibreTranslate ignores the model ID and uses the server URL configured below.
+                    CTranslate2 uses either a local multilingual model plus tokenizer, or a directional quickmt model root with separate source and target tokenizers.
                     If a render font file is uploaded, translated text is rendered with that TTF/TTC/OTF resource.
                     </div>
                     """,
@@ -246,21 +249,28 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             model: str,
             force_ocr: bool,
             ocr_langs: list[str],
-            libretranslate_url: str,
-            libretranslate_api_key: str,
+            ctranslate2_model_dir: str,
+            ctranslate2_tokenizer_path: str,
             render_font_file: str | None,
             progress: gr.Progress = gr.Progress(track_tqdm=False),
         ) -> tuple[list[str], str, str, str]:
             if not input_pdf:
                 raise gr.Error("Please upload a PDF file first.")
+            if (
+                provider == "ctranslate2"
+                and target_language not in CTRANSLATE2_TARGET_LANGUAGE_CHOICES
+            ):
+                raise gr.Error(
+                    "CTranslate2 currently supports only English and Korean targets in this local setup."
+                )
 
             serialized_ocr_langs = _serialize_ocr_langs(ocr_langs)
             normalized_model = model.strip() or default_model_for_provider(provider)
             runner_settings = _build_runtime_settings(
                 settings,
                 provider,
-                libretranslate_url,
-                libretranslate_api_key,
+                ctranslate2_model_dir,
+                ctranslate2_tokenizer_path,
                 render_font_file,
             )
             runner = PipelineRunner(runner_settings)
@@ -315,8 +325,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 default_model_for_provider(default_provider),
                 False,
                 _parse_ocr_langs(settings.default_ocr_langs),
-                settings.libretranslate_url,
-                settings.libretranslate_api_key,
+                settings.ctranslate2_model_dir,
+                settings.ctranslate2_tokenizer_path,
                 None,
                 None,
                 "",
@@ -348,8 +358,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 model,
                 force_ocr,
                 ocr_langs,
-                libretranslate_url,
-                libretranslate_api_key,
+                ctranslate2_model_dir,
+                ctranslate2_tokenizer_path,
                 render_font_file,
             ],
             outputs=[
@@ -369,8 +379,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 model,
                 force_ocr,
                 ocr_langs,
-                libretranslate_url,
-                libretranslate_api_key,
+                ctranslate2_model_dir,
+                ctranslate2_tokenizer_path,
                 render_font_file,
                 generated_files,
                 workspace_path,

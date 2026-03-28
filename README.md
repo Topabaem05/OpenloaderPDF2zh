@@ -3,7 +3,7 @@
 Python-only skeleton for a PDF translation pipeline built on:
 
 - OpenDataLoader-PDF for parsing, layout analysis, OCR, and bounding boxes
-- OpenRouter, Groq, or LibreTranslate for translation
+- OpenRouter or CTranslate2 for translation
 - PyMuPDF for layout-aware PDF re-rendering
 - Gradio for a simple local desktop-like web UI
 
@@ -32,29 +32,27 @@ python app.py
 
 - Python 3.10+
 - Java 11+
-- OpenRouter, Groq, or LibreTranslate instance access if translation is enabled
+- OpenRouter API access or a local CTranslate2 model if translation is enabled
 
-## Self-hosted LibreTranslate
+## Local CTranslate2
 
-If you want to use the LibreTranslate open source server instead of a managed API-key service,
-run your own instance and point the app to its base URL.
+If you want to run translation locally, provide a converted CTranslate2 model directory and its SentencePiece tokenizer model.
 
-Quick local example from the LibreTranslate docs:
-
-```bash
-pip install libretranslate
-libretranslate
-```
-
-Then either set the environment variable:
+Environment variables:
 
 ```bash
-OPENPDF2ZH_LIBRETRANSLATE_URL=http://127.0.0.1:5000
-LIBRETRANSLATE_API_KEY=
+OPENPDF2ZH_CTRANSLATE2_MODEL_DIR=/absolute/path/to/ctranslate2_model
+OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH=/absolute/path/to/tokenizer.model
 ```
 
-or enter the same base URL in the Gradio UI under **LibreTranslate server**.
-Self-hosted LibreTranslate instances usually do not require an API key.
+In the UI, choose **ctranslate2** and set the same two paths in the form.
+
+The app also supports a directional model root that contains:
+
+- `quickmt-ko-en/`
+- `quickmt-en-ko/`
+
+In that layout, each subdirectory should contain `model.bin`, `src.spm.model`, and `tgt.spm.model`, and `OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH` can be left blank.
 
 ## Rendering notes
 
@@ -86,6 +84,7 @@ openpdf2zh_gradio/
 │  ├─ ui.py
 │  ├─ providers/
 │  │  ├─ base.py
+│  │  ├─ ctranslate2.py
 │  │  ├─ groq.py
 │  │  └─ openrouter.py
 │  ├─ services/
