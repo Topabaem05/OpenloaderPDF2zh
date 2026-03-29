@@ -128,6 +128,11 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
 }
 
+ADSENSE_HEAD = """
+<script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579\"
+     crossorigin=\"anonymous\"></script>
+"""
+
 
 def _build_runtime_settings(
     settings: AppSettings,
@@ -791,5 +796,6 @@ def launch() -> None:
         allowed_paths=[str(settings.public_root)],
         theme=gr.themes.Soft(),
         css=CSS,
+        head=ADSENSE_HEAD,
         max_file_size="50mb",
     )
