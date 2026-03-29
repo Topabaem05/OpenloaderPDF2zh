@@ -156,9 +156,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
         gr.Markdown(
             """
             # OpenPDF2ZH
-            Simple Python-only PDF translation UI built with Gradio.
-
-            **Flow:** Upload PDF → Parse → Translate → Re-render → Download artifacts
             """,
             elem_classes=["app-shell"],
         )
@@ -232,16 +229,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         min_width=84,
                         elem_classes=["compact-action-btn"],
                     )
-                gr.Markdown(
-                    """
-                    <div class="hint">
-                    Keep the model field editable so provider/model choices can change without code changes.
-                    CTranslate2 uses either a local multilingual model plus tokenizer, or a directional quickmt model root with separate source and target tokenizers.
-                    If a render font file is uploaded, translated text is rendered with that TTF/TTC/OTF resource.
-                    </div>
-                    """,
-                )
-
             with gr.Column(scale=6):
                 translated_pdf_preview = gr.HTML(
                     value=_build_pdf_preview(
