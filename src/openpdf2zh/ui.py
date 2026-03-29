@@ -207,14 +207,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         value=settings.adjust_render_letter_spacing_for_overlap,
                         info="When nearby translated boxes overlap or nearly collide, compress letter spacing before shrinking the text.",
                     )
-                    gr.Markdown(
-                        """
-                        <div class="hint">
-                        Drag and drop a TTF/TTC/OTF font file or click to choose one.
-                        If left empty, the app uses the parsed source font family or the configured environment fallback.
-                        </div>
-                        """
-                    )
                 with gr.Row(elem_classes=["compact-action-row"]):
                     run_btn = gr.Button(
                         "Run translation",
