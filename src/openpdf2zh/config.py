@@ -13,6 +13,38 @@ def _default_ctranslate2_model_dir() -> str:
     return str(Path(__file__).resolve().parents[2] / "models")
 
 
+def _has_local_ctranslate2_models(model_dir: str) -> bool:
+    model_root = Path(model_dir).expanduser()
+    if not model_root.is_dir():
+        return False
+    directional_dirs = ("quickmt-ko-en", "quickmt-en-ko")
+    if all((model_root / name / "model.bin").exists() for name in directional_dirs):
+        return True
+    return (model_root / "model.bin").exists()
+
+
+def _default_provider_from_env(
+    configured_provider: str | None,
+    groq_api_key: str,
+    ctranslate2_model_dir: str,
+) -> str:
+    if configured_provider:
+        return configured_provider.strip().lower()
+    if groq_api_key.strip() and not _has_local_ctranslate2_models(
+        ctranslate2_model_dir
+    ):
+        return "groq"
+    return "ctranslate2"
+
+
+def _default_model_for_provider(provider: str, configured_model: str | None) -> str:
+    if configured_model:
+        return configured_model.strip()
+    if provider == "groq":
+        return "llama-3.3-70b-versatile"
+    return "auto"
+
+
 def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
@@ -49,6 +81,16 @@ class AppSettings:
         else:
             host = os.getenv("OPENPDF2ZH_HOST", "127.0.0.1")
             port = int(os.getenv("OPENPDF2ZH_PORT", "7860"))
+        ctranslate2_model_dir = os.getenv(
+            "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR",
+            _default_ctranslate2_model_dir(),
+        ).strip()
+        groq_api_key = os.getenv("GROQ_API_KEY", "")
+        default_provider = _default_provider_from_env(
+            os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER"),
+            groq_api_key,
+            ctranslate2_model_dir,
+        )
 
         return cls(
             host=host,
@@ -56,10 +98,10 @@ class AppSettings:
             workspace_root=Path(
                 os.getenv("OPENPDF2ZH_WORKSPACE_ROOT", "workspace")
             ).resolve(),
-            default_provider=os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER", "ctranslate2"),
-            default_model=os.getenv(
-                "OPENPDF2ZH_DEFAULT_MODEL",
-                "auto",
+            default_provider=default_provider,
+            default_model=_default_model_for_provider(
+                default_provider,
+                os.getenv("OPENPDF2ZH_DEFAULT_MODEL"),
             ),
             default_target_language=os.getenv(
                 "OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE", "Simplified Chinese"
@@ -103,12 +145,9 @@ class AppSettings:
                 ),
                 30.0,
             ),
-            ctranslate2_model_dir=os.getenv(
-                "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR",
-                _default_ctranslate2_model_dir(),
-            ).strip(),
+            ctranslate2_model_dir=ctranslate2_model_dir,
             ctranslate2_tokenizer_path=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH", ""
             ).strip(),
-            groq_api_key=os.getenv("GROQ_API_KEY", ""),
+            groq_api_key=groq_api_key,
         )

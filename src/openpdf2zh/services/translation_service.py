@@ -124,10 +124,17 @@ class TranslationService:
         if provider_key == "ctranslate2":
             if not self.settings.ctranslate2_model_dir:
                 raise RuntimeError("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR is missing.")
-            return CTranslate2Translator(
-                self.settings.ctranslate2_model_dir,
-                self.settings.ctranslate2_tokenizer_path,
-            )
+            try:
+                return CTranslate2Translator(
+                    self.settings.ctranslate2_model_dir,
+                    self.settings.ctranslate2_tokenizer_path,
+                )
+            except RuntimeError as exc:
+                if self.settings.groq_api_key:
+                    raise RuntimeError(
+                        f"{exc} Either upload local CTranslate2 models or switch the Service to Groq."
+                    ) from exc
+                raise
         if provider_key == "groq":
             if not self.settings.groq_api_key:
                 raise RuntimeError("GROQ_API_KEY is missing.")

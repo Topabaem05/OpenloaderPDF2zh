@@ -10,3 +10,9 @@ workspace/
 outputs/
 ctranslate2_models/
 src/*.egg-info/
+models/*
+!models/
+!models/quickmt-ko-en/
+!models/quickmt-ko-en/**
+!models/quickmt-en-ko/
+!models/quickmt-en-ko/**

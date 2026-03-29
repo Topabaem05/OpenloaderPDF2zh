@@ -53,6 +53,8 @@ It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-
 - Java 11+
 - Groq API access or a local CTranslate2 model if translation is enabled
 
+If the app is deployed without local CTranslate2 model files, set `GROQ_API_KEY`. The app will automatically prefer Groq when no local CTranslate2 model directory is available.
+
 ## Local CTranslate2
 
 If you want to run translation locally, provide a converted CTranslate2 model directory and its SentencePiece tokenizer model.
