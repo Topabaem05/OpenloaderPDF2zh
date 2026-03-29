@@ -10,6 +10,7 @@ import gradio as gr
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.pipeline import PipelineRunner
+from openpdf2zh.utils.files import start_workspace_cleanup_worker
 from openpdf2zh.utils.job_limiter import JobLimiter, QueueBusyError
 
 CSS = """
@@ -751,6 +752,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
 
 def launch() -> None:
     settings = AppSettings.from_env()
+    start_workspace_cleanup_worker(
+        settings.workspace_root,
+        settings.workspace_retention_hours * 3600,
+        settings.workspace_cleanup_interval_seconds,
+    )
     demo = create_demo(settings)
     demo.queue(
         default_concurrency_limit=settings.job_queue_concurrency,

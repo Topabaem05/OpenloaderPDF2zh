@@ -83,6 +83,56 @@ def append_run_log(path: Path, message: str) -> None:
         handle.write(f"[{timestamp}] {message}\n")
 
 
+def cleanup_expired_workspaces(root: Path, retention_seconds: float) -> list[Path]:
+    if retention_seconds <= 0 or not root.exists():
+        return []
+
+    cutoff = time.time() - retention_seconds
+    deleted: list[Path] = []
+    for workspace_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        if _latest_workspace_mtime(workspace_dir) >= cutoff:
+            continue
+        shutil.rmtree(workspace_dir)
+        deleted.append(workspace_dir)
+    return deleted
+
+
+def start_workspace_cleanup_worker(
+    root: Path,
+    retention_seconds: float,
+    interval_seconds: float,
+) -> threading.Thread | None:
+    if retention_seconds <= 0:
+        return None
+
+    cleanup_expired_workspaces(root, retention_seconds)
+
+    def sweep() -> None:
+        while True:
+            time.sleep(interval_seconds)
+            cleanup_expired_workspaces(root, retention_seconds)
+
+    worker = threading.Thread(
+        target=sweep,
+        name="workspace-cleanup",
+        daemon=True,
+    )
+    worker.start()
+    return worker
+
+
+def _latest_workspace_mtime(path: Path) -> float:
+    latest_mtime = path.stat().st_mtime
+    for child in path.rglob("*"):
+        try:
+            child_mtime = child.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if child_mtime > latest_mtime:
+            latest_mtime = child_mtime
+    return latest_mtime
+
+
 @contextmanager
 def run_log_heartbeat(
     path: Path,

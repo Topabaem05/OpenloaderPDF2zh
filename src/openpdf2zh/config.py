@@ -30,6 +30,8 @@ class AppSettings:
     adjust_render_letter_spacing_for_overlap: bool = True
     job_queue_concurrency: int = 2
     job_queue_max_size: int = 8
+    workspace_retention_hours: float = 24.0
+    workspace_cleanup_interval_seconds: float = 600.0
     ctranslate2_model_dir: str = ""
     ctranslate2_tokenizer_path: str = ""
     groq_api_key: str = ""
@@ -75,6 +77,19 @@ class AppSettings:
             job_queue_max_size=max(
                 int(os.getenv("OPENPDF2ZH_JOB_QUEUE_MAX_SIZE", "8")),
                 1,
+            ),
+            workspace_retention_hours=max(
+                float(os.getenv("OPENPDF2ZH_WORKSPACE_RETENTION_HOURS", "24")),
+                0.0,
+            ),
+            workspace_cleanup_interval_seconds=max(
+                float(
+                    os.getenv(
+                        "OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS",
+                        "600",
+                    )
+                ),
+                30.0,
             ),
             ctranslate2_model_dir=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", ""

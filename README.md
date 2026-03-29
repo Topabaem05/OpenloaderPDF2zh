@@ -85,15 +85,20 @@ The Gradio server already uses a bounded in-process queue for document jobs.
 
 - `OPENPDF2ZH_JOB_QUEUE_CONCURRENCY`: maximum number of translation jobs to run at the same time
 - `OPENPDF2ZH_JOB_QUEUE_MAX_SIZE`: maximum number of queued requests waiting for a worker slot
+- `OPENPDF2ZH_WORKSPACE_RETENTION_HOURS`: how long uploaded/generated workspaces stay on disk before automatic deletion
+- `OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS`: how often the server sweeps for expired workspaces
 
 For a single host, start conservatively with small values such as:
 
 ```bash
 OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=2
 OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=8
+OPENPDF2ZH_WORKSPACE_RETENTION_HOURS=24
+OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS=600
 ```
 
 If the queue is saturated, the app now returns an explicit busy message instead of silently accepting more heavy jobs.
+Completed workspaces are also deleted automatically after the configured retention period, so uploaded PDFs and translated outputs do not remain on the server indefinitely.
 
 ### Oracle Always Free Ampere A1 guidance
 
@@ -102,6 +107,8 @@ Oracle Always Free `VM.Standard.A1.Flex` gives up to **4 OCPUs / 24 GB RAM total
 ```bash
 OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=1
 OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=6
+OPENPDF2ZH_WORKSPACE_RETENTION_HOURS=6
+OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS=600
 ```
 
 Raise concurrency only after measuring CPU, RAM, and end-to-end latency on your chosen A1 allocation.
