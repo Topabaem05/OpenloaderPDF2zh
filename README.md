@@ -46,14 +46,23 @@ This repository now includes:
 
 At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
 
-Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries before the app starts.
+Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries from Hugging Face before the app starts.
 
-For private repositories on Railway, set one of these environment variables:
+The Railway build now downloads the directional quickmt models from Hugging Face by default:
 
-- `OPENPDF2ZH_MODEL_BUNDLE_URL` (+ optional `OPENPDF2ZH_MODEL_BUNDLE_SHA256`) to download a versioned tarball of `quickmt-ko-en/` and `quickmt-en-ko/`
-- or `OPENPDF2ZH_MODEL_REPO_TOKEN` / `GITHUB_TOKEN` so the build can clone the repo and run `git lfs pull`
+- `quickmt/quickmt-ko-en`
+- `quickmt/quickmt-en-ko`
 
-If `OPENPDF2ZH_MODEL_BUNDLE_URL` is a private GitHub release asset URL like `https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`, also set `OPENPDF2ZH_MODEL_REPO_TOKEN` or `GITHUB_TOKEN`. The build now resolves that browser URL to the GitHub Releases API asset endpoint automatically.
+These default repositories are public, so Railway does not need a token for the default path.
+
+You can override them with these environment variables:
+
+- `OPENPDF2ZH_QUICKMT_KO_EN_HF_REPO_ID`
+- `OPENPDF2ZH_QUICKMT_KO_EN_HF_REVISION`
+- `OPENPDF2ZH_QUICKMT_EN_KO_HF_REPO_ID`
+- `OPENPDF2ZH_QUICKMT_EN_KO_HF_REVISION`
+
+If the Hugging Face repositories are private or gated, set `OPENPDF2ZH_QUICKMT_HF_TOKEN` (or standard `HF_TOKEN`) in Railway.
 
 ## Requirements
 
@@ -61,7 +70,7 @@ If `OPENPDF2ZH_MODEL_BUNDLE_URL` is a private GitHub release asset URL like `htt
 - Java 11+
 - Local CTranslate2 model files for translation
 
-If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository includes a Railway build-time model materialization step so the real quickmt binaries are fetched into the image before the app starts.
+If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository now avoids that by downloading the real quickmt binaries from Hugging Face during the Railway build.
 
 ## Local CTranslate2
 

@@ -1,20 +1,32 @@
 from __future__ import annotations
 
 import os
-import hashlib
-import json
 import shutil
-import subprocess
-import tempfile
-import tarfile
 from pathlib import Path
-from urllib.parse import quote, urlparse
-from urllib.request import Request, urlopen
+
+from huggingface_hub import snapshot_download
 
 from dotenv import load_dotenv
 
 MODEL_DIRS = ("quickmt-ko-en", "quickmt-en-ko")
-DEFAULT_REPO_URL = "https://github.com/Topabaem05/OpenloaderPDF2zh.git"
+DEFAULT_HF_MODELS = {
+    "quickmt-ko-en": {
+        "repo_id": "quickmt/quickmt-ko-en",
+        "revision": "33b35a7afa91037ccf8c607c9e6e26e3e10ddcdd",
+    },
+    "quickmt-en-ko": {
+        "repo_id": "quickmt/quickmt-en-ko",
+        "revision": "08e130e4f742c4442377983c66294d57bebe0cc7",
+    },
+}
+MODEL_FILES = (
+    "config.json",
+    "model.bin",
+    "source_vocabulary.json",
+    "src.spm.model",
+    "target_vocabulary.json",
+    "tgt.spm.model",
+)
 
 
 def is_lfs_pointer(path: Path) -> bool:
@@ -37,102 +49,29 @@ def has_real_models(root: Path) -> bool:
     )
 
 
-def run(*args: str, cwd: Path | None = None) -> None:
-    subprocess.run(list(args), cwd=str(cwd) if cwd else None, check=True)
-
-
-def build_repo_url(repo_url: str) -> str:
-    token = os.getenv("OPENPDF2ZH_MODEL_REPO_TOKEN") or os.getenv("GITHUB_TOKEN")
-    if not token:
-        return repo_url
-    if repo_url.startswith("https://github.com/"):
-        prefix = "https://github.com/"
-        remainder = repo_url[len(prefix) :]
-        return f"https://x-access-token:{quote(token, safe='')}@github.com/{remainder}"
-    return repo_url
-
-
-def download_model_bundle(bundle_url: str, destination: Path) -> None:
-    token = os.getenv("OPENPDF2ZH_MODEL_REPO_TOKEN") or os.getenv("GITHUB_TOKEN")
-    resolved_url = resolve_github_release_asset_api_url(bundle_url, token)
-
-    request = Request(resolved_url)
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
-    if "/releases/assets/" in resolved_url:
-        request.add_header("Accept", "application/octet-stream")
-
-    with urlopen(request, timeout=120) as response, destination.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-
-
-def resolve_github_release_asset_api_url(bundle_url: str, token: str | None) -> str:
-    parsed = urlparse(bundle_url)
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if parsed.netloc != "github.com":
-        return bundle_url
-    if len(path_parts) < 6 or path_parts[2:4] != ["releases", "download"]:
-        return bundle_url
-    if not token:
-        raise RuntimeError(
-            "The configured quickmt bundle URL points to a GitHub release asset on github.com. "
-            "If the repository is private, also set OPENPDF2ZH_MODEL_REPO_TOKEN or GITHUB_TOKEN so the build can resolve the asset through the GitHub API."
-        )
-
-    owner, repo_name = path_parts[0], path_parts[1]
-    tag = path_parts[4]
-    asset_name = "/".join(path_parts[5:])
-    release_api = (
-        f"https://api.github.com/repos/{owner}/{repo_name}/releases/tags/{tag}"
-    )
-    request = Request(release_api)
-    request.add_header("Authorization", f"Bearer {token}")
-    request.add_header("Accept", "application/vnd.github+json")
-
-    try:
-        with urlopen(request, timeout=120) as response:
-            payload = json.load(response)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to resolve GitHub release metadata for {bundle_url}. "
-            "Check OPENPDF2ZH_MODEL_REPO_TOKEN/GITHUB_TOKEN permissions and the release tag."
-        ) from exc
-
-    for asset in payload.get("assets", []):
-        if asset.get("name") == asset_name:
-            return str(asset.get("url"))
-
-    raise RuntimeError(
-        f"Could not find a GitHub release asset named {asset_name!r} under tag {tag!r}."
-    )
-
-
-def verify_sha256(path: Path, expected_sha256: str) -> None:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    actual = digest.hexdigest()
-    if actual.lower() != expected_sha256.lower():
-        raise RuntimeError(
-            f"Downloaded quickmt bundle SHA256 mismatch. Expected {expected_sha256}, got {actual}."
-        )
-
-
-def extract_model_bundle(archive_path: Path, target_root: Path) -> None:
+def materialize_from_hugging_face(target_root: Path) -> None:
+    token = os.getenv("OPENPDF2ZH_QUICKMT_HF_TOKEN") or os.getenv("HF_TOKEN")
     target_root.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(archive_path, "r:gz") as archive:
-        archive.extractall(target_root)
 
-
-def materialize_from_bundle(bundle_url: str, target_root: Path) -> None:
-    expected_sha256 = os.getenv("OPENPDF2ZH_MODEL_BUNDLE_SHA256", "").strip()
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        archive_path = Path(tmp_dir) / "quickmt-models.tar.gz"
-        download_model_bundle(bundle_url, archive_path)
-        if expected_sha256:
-            verify_sha256(archive_path, expected_sha256)
-        extract_model_bundle(archive_path, target_root)
+    for model_dir, defaults in DEFAULT_HF_MODELS.items():
+        repo_id = os.getenv(
+            f"OPENPDF2ZH_{model_dir.upper().replace('-', '_')}_HF_REPO_ID",
+            defaults["repo_id"],
+        ).strip()
+        revision = os.getenv(
+            f"OPENPDF2ZH_{model_dir.upper().replace('-', '_')}_HF_REVISION",
+            defaults["revision"],
+        ).strip()
+        local_dir = target_root / model_dir
+        if local_dir.exists():
+            shutil.rmtree(local_dir)
+        snapshot_download(
+            repo_id=repo_id,
+            revision=revision,
+            token=token,
+            local_dir=str(local_dir),
+            allow_patterns=list(MODEL_FILES),
+        )
 
 
 def main() -> None:
@@ -146,65 +85,12 @@ def main() -> None:
         print(f"quickmt models already materialized in {target_root}")
         return
 
-    bundle_url = os.getenv("OPENPDF2ZH_MODEL_BUNDLE_URL", "").strip()
-    if bundle_url:
-        materialize_from_bundle(bundle_url, target_root)
-        if not has_real_models(target_root):
-            raise RuntimeError(
-                f"Downloaded quickmt bundle from {bundle_url}, but real model files were not materialized into {target_root}."
-            )
-        print(f"quickmt models materialized in {target_root}")
-        return
-
-    if not (os.getenv("OPENPDF2ZH_MODEL_REPO_TOKEN") or os.getenv("GITHUB_TOKEN")):
-        raise RuntimeError(
-            "No quickmt model source configured. Set OPENPDF2ZH_MODEL_BUNDLE_URL (preferred) or OPENPDF2ZH_MODEL_REPO_TOKEN/GITHUB_TOKEN before running the Railway build."
-        )
-
-    repo_url = os.getenv("OPENPDF2ZH_MODEL_REPO_URL", DEFAULT_REPO_URL)
-    repo_ref = os.getenv("OPENPDF2ZH_MODEL_REPO_REF") or os.getenv(
-        "RAILWAY_GIT_COMMIT_SHA",
-        "main",
-    )
-    clone_url = build_repo_url(repo_url)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        clone_dir = Path(tmp_dir) / "repo"
-        try:
-            run("git", "clone", clone_url, str(clone_dir))
-        except subprocess.CalledProcessError as exc:
-            if clone_url == repo_url and repo_url.startswith("https://github.com/"):
-                raise RuntimeError(
-                    "Failed to clone the model repository during build. If the GitHub repository is private, "
-                    "set OPENPDF2ZH_MODEL_REPO_TOKEN (or GITHUB_TOKEN) in Railway, or provide OPENPDF2ZH_MODEL_BUNDLE_URL so the build can fetch the real quickmt model files."
-                ) from exc
-            raise
-        run("git", "checkout", repo_ref, cwd=clone_dir)
-        run("git", "lfs", "install", "--local", cwd=clone_dir)
-        run(
-            "git",
-            "lfs",
-            "pull",
-            "--include",
-            "models/quickmt-ko-en/**,models/quickmt-en-ko/**",
-            cwd=clone_dir,
-        )
-
-        source_root = clone_dir / "models"
-        target_root.mkdir(parents=True, exist_ok=True)
-        for model_dir in MODEL_DIRS:
-            source_dir = source_root / model_dir
-            if not source_dir.is_dir():
-                raise RuntimeError(f"Missing model directory in clone: {source_dir}")
-            destination_dir = target_root / model_dir
-            if destination_dir.exists():
-                shutil.rmtree(destination_dir)
-            shutil.copytree(source_dir, destination_dir)
+    materialize_from_hugging_face(target_root)
 
     if not has_real_models(target_root):
         raise RuntimeError(
-            f"Failed to materialize quickmt models into {target_root}. "
-            "The copied model files are still missing or are Git LFS pointers."
+            f"Failed to materialize quickmt models into {target_root} from Hugging Face. "
+            "Check the configured Hugging Face repo IDs, revisions, and HF token if the model repository is private or gated."
         )
 
     print(f"quickmt models materialized in {target_root}")
