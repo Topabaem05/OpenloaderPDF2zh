@@ -101,8 +101,8 @@ Follow the order used in `config.py`, `translation_service.py`, and `ui.py`:
 - Classes: `PascalCase`
 - Functions, methods, variables: `snake_case`
 - Constants: uppercase only when truly constant
-- Env vars: `OPENPDF2ZH_*`, `GROQ_API_KEY`
-- Provider identifiers: lowercase strings such as `ctranslate2` and `groq`
+- Env vars: `OPENPDF2ZH_*`
+- Provider identifiers: lowercase strings such as `ctranslate2`
 - Prefer intent-revealing names like `prepare_workspace`, `translate_document`, `generated_files`, and `wait_for_port`.
 ### Error handling
 - Prefer explicit, actionable exceptions.

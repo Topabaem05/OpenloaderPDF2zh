@@ -10,7 +10,6 @@ from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest, TranslationUnit
 from openpdf2zh.providers.base import BaseTranslator
 from openpdf2zh.providers.ctranslate2 import CTranslate2Translator
-from openpdf2zh.providers.groq import GroqTranslator
 from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
 
@@ -124,21 +123,10 @@ class TranslationService:
         if provider_key == "ctranslate2":
             if not self.settings.ctranslate2_model_dir:
                 raise RuntimeError("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR is missing.")
-            try:
-                return CTranslate2Translator(
-                    self.settings.ctranslate2_model_dir,
-                    self.settings.ctranslate2_tokenizer_path,
-                )
-            except RuntimeError as exc:
-                if self.settings.groq_api_key:
-                    raise RuntimeError(
-                        f"{exc} Either upload local CTranslate2 models or switch the Service to Groq."
-                    ) from exc
-                raise
-        if provider_key == "groq":
-            if not self.settings.groq_api_key:
-                raise RuntimeError("GROQ_API_KEY is missing.")
-            return GroqTranslator(self.settings.groq_api_key)
+            return CTranslate2Translator(
+                self.settings.ctranslate2_model_dir,
+                self.settings.ctranslate2_tokenizer_path,
+            )
         raise ValueError(f"Unsupported provider: {provider}")
 
     def _extract_units(self, payload: Any) -> list[TranslationUnit]:

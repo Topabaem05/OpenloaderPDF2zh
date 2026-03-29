@@ -45,17 +45,15 @@ This repository now includes `railway.json` with:
 
 At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
 
-It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-17-jre-headless`) for OpenDataLoader-PDF parsing.
+It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-17-jre-headless`) and Git LFS tooling for OpenDataLoader-PDF parsing and quickmt model materialization.
 
 ## Requirements
 
 - Python 3.10+
 - Java 11+
-- Groq API access or a local CTranslate2 model if translation is enabled
+- Local CTranslate2 model files for translation
 
-If the app is deployed without local CTranslate2 model files, set `GROQ_API_KEY`. The app will automatically prefer Groq when no local CTranslate2 model directory is available.
-
-If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. In that case, either ship the real model artifacts in the image/volume or use Groq as the deployment fallback.
+If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository now includes a Railway build-time model materialization step so the real quickmt binaries are fetched into the image before the app starts.
 
 ## Local CTranslate2
 
@@ -134,7 +132,6 @@ openpdf2zh_gradio/
 │  ├─ providers/
 │  │  ├─ base.py
 │  │  ├─ ctranslate2.py
-│  │  └─ groq.py
 │  ├─ services/
 │  │  ├─ parser_service.py
 │  │  ├─ render_service.py

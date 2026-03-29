@@ -10,7 +10,7 @@ The product flow is:
 
 1. Upload a PDF in a simple Gradio UI
 2. Parse the PDF with OpenDataLoader-PDF
-3. Translate extracted text with CTranslate2 or Groq
+3. Translate extracted text with CTranslate2
 4. Re-render a translated mono PDF with PyMuPDF
 5. Save stable artifacts into a per-job workspace
 
@@ -48,7 +48,7 @@ Gradio Blocks UI
         -> ParserService
             -> OpenDataLoader-PDF
         -> TranslationService
-            -> CTranslate2Translator or GroqTranslator
+            -> CTranslate2Translator
         -> RenderService
             -> PyMuPDF redact + HTML textbox reinsert
 ```

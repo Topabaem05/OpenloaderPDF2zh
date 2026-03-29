@@ -307,7 +307,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     job_submission_limit = (
         settings.job_queue_concurrency + settings.job_queue_max_size + 2
     )
-    provider_choices = [("Groq", "groq"), ("CTranslate2", "ctranslate2")]
+    provider_choices = [("CTranslate2", "ctranslate2")]
     provider_values = [value for _, value in provider_choices]
     default_provider = (
         settings.default_provider
@@ -318,8 +318,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     def default_model_for_provider(selected_provider: str) -> str:
         if selected_provider == "ctranslate2":
             return "auto"
-        if selected_provider == "groq":
-            return settings.default_model or "llama-3.3-70b-versatile"
         return settings.default_model
 
     with gr.Blocks() as demo:

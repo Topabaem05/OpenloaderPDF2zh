@@ -182,7 +182,7 @@ class CTranslate2Translator(BaseTranslator):
         if self._is_lfs_pointer(path):
             raise RuntimeError(
                 f"CTranslate2 model file is still a Git LFS pointer, not the real binary: {path}. "
-                "On Railway, either provide real local model files in the image or use the Groq service instead."
+                "On Railway, run the build-time quickmt materialization step so the real local model files are copied into the image."
             )
 
     def _is_lfs_pointer(self, path: Path) -> bool:
