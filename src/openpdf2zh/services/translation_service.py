@@ -21,6 +21,7 @@ class TranslationService:
     EXPLICIT_LINE_SPLIT_MAX_SEGMENTS = 4
     EXPLICIT_LINE_SPLIT_WIDTH_RATIO = 1.45
     EXPLICIT_LINE_SPLIT_HEIGHT_RATIO = 1.75
+    EXCESSIVE_REPEAT_PATTERN = re.compile(r"([^\s])\1{9,}")
     TOC_LEADER_PATTERN = re.compile(
         r"(?P<leader>(?:\.\s*){4,}|(?:·\s*){4,}|(?:․\s*){4,})(?P<page>[A-Za-z0-9ivxlcdmIVXLCDM]+)"
     )
@@ -90,6 +91,7 @@ class TranslationService:
                         target_language=request.target_language,
                         model=request.model,
                     )
+                    unit.translated = self._sanitize_translated_text(unit.translated)
                 except RuntimeError as exc:
                     append_run_log(
                         workspace.run_log,
@@ -320,6 +322,12 @@ class TranslationService:
 
     def _single_line_error(self, exc: Exception) -> str:
         return " ".join(str(exc).split())
+
+    def _sanitize_translated_text(self, text: str) -> str:
+        return self.EXCESSIVE_REPEAT_PATTERN.sub(
+            lambda match: match.group(1),
+            text,
+        )
 
     def _split_toc_unit(self, unit: TranslationUnit) -> list[TranslationUnit]:
         matches = list(self.TOC_LEADER_PATTERN.finditer(unit.original))

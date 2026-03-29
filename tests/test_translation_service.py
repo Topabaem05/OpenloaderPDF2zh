@@ -12,6 +12,11 @@ class _StubTranslator:
         return f"translated:{text}"
 
 
+class _RepeatingTranslator:
+    def translate(self, text: str, *, target_language: str, model: str) -> str:
+        return "tttttttttttttttt"
+
+
 def test_translate_document_writes_progress_entries_to_run_log(
     monkeypatch,
     tmp_path: Path,
@@ -272,6 +277,56 @@ def test_translate_document_respects_duplicate_thresholds(
     )
 
     assert [unit.original for unit in units] == ["hello world", "hello"]
+
+
+def test_translate_document_collapses_excessive_repeated_characters(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_pdf = tmp_path / "sample.pdf"
+    source_pdf.write_text("fake pdf", encoding="utf-8")
+    workspace = prepare_workspace(tmp_path / "workspace", source_pdf)
+    workspace.raw_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "items": [
+                            {
+                                "type": "paragraph",
+                                "page": 1,
+                                "bbox": [0, 0, 120, 40],
+                                "font": "ArialMT",
+                                "font size": 12.0,
+                                "content": "original",
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = TranslationService(AppSettings())
+    monkeypatch.setattr(
+        service, "_build_translator", lambda provider: _RepeatingTranslator()
+    )
+
+    units = service.translate_document(
+        PipelineRequest(
+            input_pdf=source_pdf,
+            target_language="English",
+            provider="openrouter",
+            model="nvidia/nemotron-3-super-120b-a12b:free",
+        ),
+        workspace,
+    )
+
+    assert units[0].translated == "t"
+    structured = json.loads(workspace.structured_json.read_text(encoding="utf-8"))
+    assert structured["pages"][0]["elements"][0]["translated"] == "t"
 
 
 def test_translate_document_keeps_nested_boxes_with_different_scale(
