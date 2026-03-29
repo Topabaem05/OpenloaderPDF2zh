@@ -10,6 +10,8 @@ from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from dotenv import load_dotenv
+
 MODEL_DIRS = ("quickmt-ko-en", "quickmt-en-ko")
 DEFAULT_REPO_URL = "https://github.com/Topabaem05/OpenloaderPDF2zh.git"
 
@@ -91,6 +93,7 @@ def materialize_from_bundle(bundle_url: str, target_root: Path) -> None:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
+    load_dotenv(repo_root / ".env")
     target_root = Path(
         os.getenv("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR") or repo_root / "models"
     ).expanduser()
@@ -108,6 +111,11 @@ def main() -> None:
             )
         print(f"quickmt models materialized in {target_root}")
         return
+
+    if not (os.getenv("OPENPDF2ZH_MODEL_REPO_TOKEN") or os.getenv("GITHUB_TOKEN")):
+        raise RuntimeError(
+            "No quickmt model source configured. Set OPENPDF2ZH_MODEL_BUNDLE_URL (preferred) or OPENPDF2ZH_MODEL_REPO_TOKEN/GITHUB_TOKEN before running the Railway build."
+        )
 
     repo_url = os.getenv("OPENPDF2ZH_MODEL_REPO_URL", DEFAULT_REPO_URL)
     repo_ref = os.getenv("OPENPDF2ZH_MODEL_REPO_REF") or os.getenv(
