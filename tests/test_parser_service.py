@@ -70,7 +70,7 @@ def test_parser_service_convert_uses_java_only_mode(
     request = PipelineRequest(
         input_pdf=source_pdf,
         target_language="English",
-        provider="openrouter",
+        provider="ctranslate2",
         model="nvidia/nemotron-3-super-120b-a12b:free",
     )
 
@@ -100,7 +100,7 @@ def test_parser_service_surfaces_convert_failure(
     request = PipelineRequest(
         input_pdf=source_pdf,
         target_language="English",
-        provider="openrouter",
+        provider="ctranslate2",
         model="nvidia/nemotron-3-super-120b-a12b:free",
     )
 

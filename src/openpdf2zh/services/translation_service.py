@@ -11,7 +11,6 @@ from openpdf2zh.models import JobWorkspace, PipelineRequest, TranslationUnit
 from openpdf2zh.providers.base import BaseTranslator
 from openpdf2zh.providers.ctranslate2 import CTranslate2Translator
 from openpdf2zh.providers.groq import GroqTranslator
-from openpdf2zh.providers.openrouter import OpenRouterTranslator
 from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
 
@@ -122,14 +121,6 @@ class TranslationService:
 
     def _build_translator(self, provider: str) -> BaseTranslator:
         provider_key = provider.strip().lower()
-        if provider_key == "openrouter":
-            if not self.settings.openrouter_api_key:
-                raise RuntimeError("OPENROUTER_API_KEY is missing.")
-            return OpenRouterTranslator(
-                self.settings.openrouter_api_key,
-                app_name=self.settings.openrouter_app_name,
-                app_url=self.settings.openrouter_app_url,
-            )
         if provider_key == "ctranslate2":
             if not self.settings.ctranslate2_model_dir:
                 raise RuntimeError("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR is missing.")

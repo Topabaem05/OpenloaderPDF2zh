@@ -298,12 +298,12 @@ def _run_pipeline_or_raise_gradio(
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     settings = settings or AppSettings.from_env()
-    provider_choices = [("OpenRouter", "openrouter"), ("CTranslate2", "ctranslate2")]
+    provider_choices = [("CTranslate2", "ctranslate2")]
     provider_values = [value for _, value in provider_choices]
     default_provider = (
         settings.default_provider
         if settings.default_provider in provider_values
-        else "openrouter"
+        else "ctranslate2"
     )
 
     def default_model_for_provider(selected_provider: str) -> str:

@@ -7,8 +7,8 @@ def test_pipeline_request_fields() -> None:
     request = PipelineRequest(
         input_pdf=Path("sample.pdf"),
         target_language="Simplified Chinese",
-        provider="openrouter",
-        model="openrouter/auto",
+        provider="ctranslate2",
+        model="auto",
     )
     assert request.input_pdf.name == "sample.pdf"
     assert request.target_language == "Simplified Chinese"

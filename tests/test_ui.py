@@ -52,7 +52,7 @@ def test_build_runtime_settings_keeps_existing_render_font_when_no_upload() -> N
 
     runtime_settings = _build_runtime_settings(
         settings,
-        "openrouter",
+        "groq",
         settings.ctranslate2_model_dir,
         settings.ctranslate2_tokenizer_path,
         None,
@@ -67,7 +67,7 @@ def test_build_runtime_settings_updates_overlap_spacing_toggle() -> None:
 
     runtime_settings = _build_runtime_settings(
         settings,
-        "openrouter",
+        "groq",
         settings.ctranslate2_model_dir,
         settings.ctranslate2_tokenizer_path,
         None,

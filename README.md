@@ -3,7 +3,7 @@
 Python-only skeleton for a PDF translation pipeline built on:
 
 - OpenDataLoader-PDF for parsing, layout analysis, and bounding boxes
-- OpenRouter or CTranslate2 for translation
+- CTranslate2 or Groq for translation
 - PyMuPDF for layout-aware PDF re-rendering
 - Gradio for a simple local desktop-like web UI
 
@@ -40,7 +40,7 @@ Upstream project: <https://github.com/opendataloader-project/opendataloader-pdf>
 
 - Python 3.10+
 - Java 11+
-- OpenRouter API access or a local CTranslate2 model if translation is enabled
+- Groq API access or a local CTranslate2 model if translation is enabled
 
 ## Local CTranslate2
 
@@ -95,8 +95,7 @@ openpdf2zh_gradio/
 │  ├─ providers/
 │  │  ├─ base.py
 │  │  ├─ ctranslate2.py
-│  │  ├─ groq.py
-│  │  └─ openrouter.py
+│  │  └─ groq.py
 │  ├─ services/
 │  │  ├─ parser_service.py
 │  │  ├─ render_service.py

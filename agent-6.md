@@ -10,7 +10,7 @@ The product flow is:
 
 1. Upload a PDF in a simple Gradio UI
 2. Parse the PDF with OpenDataLoader-PDF
-3. Translate extracted text with OpenRouter or Groq through an OpenAI-compatible client
+3. Translate extracted text with CTranslate2 or Groq
 4. Re-render a translated mono PDF with PyMuPDF
 5. Save stable artifacts into a per-job workspace
 
@@ -48,7 +48,7 @@ Gradio Blocks UI
         -> ParserService
             -> OpenDataLoader-PDF
         -> TranslationService
-            -> OpenRouterTranslator or GroqTranslator
+            -> CTranslate2Translator or GroqTranslator
         -> RenderService
             -> PyMuPDF redact + HTML textbox reinsert
 ```
@@ -89,7 +89,7 @@ Keep these responsibilities separated.
 
 - Translate per extracted text unit, not per whole document blob
 - Preserve math, LaTeX, numbers, code, citations, and technical terms where appropriate
-- Keep the provider adapter OpenAI-compatible so OpenRouter and Groq remain swappable
+- Keep provider-specific translation logic out of the UI layer
 - Avoid provider-specific logic in the UI layer
 
 ### Rendering

@@ -20,8 +20,8 @@ class AppSettings:
     host: str = "127.0.0.1"
     port: int = 7860
     workspace_root: Path = Path("workspace")
-    default_provider: str = "openrouter"
-    default_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    default_provider: str = "ctranslate2"
+    default_model: str = "auto"
     default_target_language: str = "Simplified Chinese"
     duplicate_box_iou_threshold: float = 0.85
     duplicate_box_iom_threshold: float = 0.9
@@ -30,10 +30,7 @@ class AppSettings:
     adjust_render_letter_spacing_for_overlap: bool = True
     ctranslate2_model_dir: str = ""
     ctranslate2_tokenizer_path: str = ""
-    openrouter_api_key: str = ""
     groq_api_key: str = ""
-    openrouter_app_name: str = "OpenPDF2ZH"
-    openrouter_app_url: str = ""
 
     @classmethod
     def from_env(cls) -> "AppSettings":
@@ -43,10 +40,10 @@ class AppSettings:
             workspace_root=Path(
                 os.getenv("OPENPDF2ZH_WORKSPACE_ROOT", "workspace")
             ).resolve(),
-            default_provider=os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER", "openrouter"),
+            default_provider=os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER", "ctranslate2"),
             default_model=os.getenv(
                 "OPENPDF2ZH_DEFAULT_MODEL",
-                "nvidia/nemotron-3-super-120b-a12b:free",
+                "auto",
             ),
             default_target_language=os.getenv(
                 "OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE", "Simplified Chinese"
@@ -75,10 +72,5 @@ class AppSettings:
             ctranslate2_tokenizer_path=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH", ""
             ).strip(),
-            openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             groq_api_key=os.getenv("GROQ_API_KEY", ""),
-            openrouter_app_name=os.getenv(
-                "OPENPDF2ZH_OPENROUTER_APP_NAME", "OpenPDF2ZH"
-            ),
-            openrouter_app_url=os.getenv("OPENPDF2ZH_OPENROUTER_APP_URL", ""),
         )
