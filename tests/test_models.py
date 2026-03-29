@@ -12,6 +12,7 @@ def test_pipeline_request_fields() -> None:
     )
     assert request.input_pdf.name == "sample.pdf"
     assert request.target_language == "Simplified Chinese"
+    assert request.page_limit is None
 
 
 def test_translation_unit_defaults() -> None:

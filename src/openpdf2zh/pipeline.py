@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest, PipelineResult
@@ -27,6 +30,15 @@ class PipelineRunner:
         append_run_log(workspace.run_log, "pipeline=start")
         append_run_log(workspace.run_log, f"job_id={workspace.job_id}")
         append_run_log(workspace.run_log, f"input_pdf={workspace.input_pdf}")
+        if request.page_limit is not None:
+            applied_page_limit = self._limit_workspace_pdf_pages(
+                workspace.input_pdf,
+                request.page_limit,
+            )
+            append_run_log(
+                workspace.run_log,
+                f"page_limit={applied_page_limit}",
+            )
 
         if progress is not None:
             progress(0.15, desc="Parsing PDF with OpenDataLoader")
@@ -89,3 +101,26 @@ class PipelineRunner:
             target_language=request.target_language,
             summary_markdown=summary,
         )
+
+    def _limit_workspace_pdf_pages(self, pdf_path: Path, page_limit: int) -> int:
+        if page_limit <= 0:
+            return 0
+
+        source = fitz.open(pdf_path)
+        try:
+            total_pages = len(source)
+            applied_page_limit = min(page_limit, total_pages)
+            if applied_page_limit >= total_pages:
+                return applied_page_limit
+
+            trimmed = fitz.open()
+            try:
+                trimmed.insert_pdf(source, from_page=0, to_page=applied_page_limit - 1)
+                trimmed_path = pdf_path.with_name(f"{pdf_path.stem}-trimmed.pdf")
+                trimmed.save(trimmed_path)
+            finally:
+                trimmed.close()
+            trimmed_path.replace(pdf_path)
+            return applied_page_limit
+        finally:
+            source.close()
