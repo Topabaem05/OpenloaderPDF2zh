@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 import gradio as gr
 import pymupdf as fitz
+from fastapi.responses import PlainTextResponse
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest
@@ -131,7 +132,10 @@ SECURITY_HEADERS = {
 ADSENSE_HEAD = """
 <script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579\"
      crossorigin=\"anonymous\"></script>
+<meta name=\"google-adsense-account\" content=\"ca-pub-5911950308781579\">
 """
+
+ADSENSE_ADS_TXT = "google.com, pub-5911950308781579, DIRECT, f08c47fec0942fa0\n"
 
 
 def _build_runtime_settings(
@@ -765,15 +769,13 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     return demo
 
 
-def launch() -> None:
-    settings = AppSettings.from_env()
-    start_workspace_cleanup_worker(
-        settings.workspace_root,
-        settings.workspace_retention_hours * 3600,
-        settings.workspace_cleanup_interval_seconds,
-    )
-    demo = create_demo(settings)
+def _attach_adsense_route(demo: gr.Blocks) -> None:
+    @demo.app.get("/ads.txt", include_in_schema=False)
+    async def ads_txt() -> PlainTextResponse:
+        return PlainTextResponse(ADSENSE_ADS_TXT)
 
+
+def _attach_security_middleware(demo: gr.Blocks) -> None:
     @demo.app.middleware("http")
     async def add_security_headers(request, call_next):
         response = await call_next(request)
@@ -785,6 +787,18 @@ def launch() -> None:
                 "max-age=31536000; includeSubDomains"
             )
         return response
+
+
+def launch() -> None:
+    settings = AppSettings.from_env()
+    start_workspace_cleanup_worker(
+        settings.workspace_root,
+        settings.workspace_retention_hours * 3600,
+        settings.workspace_cleanup_interval_seconds,
+    )
+    demo = create_demo(settings)
+    _attach_adsense_route(demo)
+    _attach_security_middleware(demo)
 
     demo.queue(
         default_concurrency_limit=settings.job_queue_concurrency,
