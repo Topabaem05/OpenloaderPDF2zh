@@ -6,6 +6,8 @@ from urllib.parse import quote
 
 import gradio as gr
 import pymupdf as fitz
+import uvicorn
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 
 from openpdf2zh.config import AppSettings
@@ -769,14 +771,14 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     return demo
 
 
-def _attach_adsense_route(demo: gr.Blocks) -> None:
-    @demo.app.get("/ads.txt", include_in_schema=False)
+def _attach_adsense_route(app: FastAPI) -> None:
+    @app.get("/ads.txt", include_in_schema=False)
     async def ads_txt() -> PlainTextResponse:
         return PlainTextResponse(ADSENSE_ADS_TXT)
 
 
-def _attach_security_middleware(demo: gr.Blocks) -> None:
-    @demo.app.middleware("http")
+def _attach_security_middleware(app: FastAPI) -> None:
+    @app.middleware("http")
     async def add_security_headers(request, call_next):
         response = await call_next(request)
         for key, value in SECURITY_HEADERS.items():
@@ -797,14 +799,17 @@ def launch() -> None:
         settings.workspace_cleanup_interval_seconds,
     )
     demo = create_demo(settings)
-    _attach_adsense_route(demo)
-    _attach_security_middleware(demo)
-
     demo.queue(
         default_concurrency_limit=settings.job_queue_concurrency,
         max_size=(settings.job_queue_concurrency + settings.job_queue_max_size + 4),
     )
-    demo.launch(
+    app = FastAPI()
+    _attach_adsense_route(app)
+    _attach_security_middleware(app)
+    app = gr.mount_gradio_app(
+        app,
+        demo,
+        path="/",
         server_name=settings.host,
         server_port=settings.port,
         allowed_paths=[str(settings.public_root)],
@@ -813,3 +818,4 @@ def launch() -> None:
         head=ADSENSE_HEAD,
         max_file_size="50mb",
     )
+    uvicorn.run(app, host=settings.host, port=settings.port)
