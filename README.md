@@ -79,6 +79,33 @@ OPENPDF2ZH_RENDER_FONT_PATH=/absolute/path/to/font.ttf
 
 See `.env.example`.
 
+### Server queue controls
+
+The Gradio server already uses a bounded in-process queue for document jobs.
+
+- `OPENPDF2ZH_JOB_QUEUE_CONCURRENCY`: maximum number of translation jobs to run at the same time
+- `OPENPDF2ZH_JOB_QUEUE_MAX_SIZE`: maximum number of queued requests waiting for a worker slot
+
+For a single host, start conservatively with small values such as:
+
+```bash
+OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=2
+OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=8
+```
+
+If the queue is saturated, the app now returns an explicit busy message instead of silently accepting more heavy jobs.
+
+### Oracle Always Free Ampere A1 guidance
+
+Oracle Always Free `VM.Standard.A1.Flex` gives up to **4 OCPUs / 24 GB RAM total** across the tenancy. Because this app parses PDFs, translates blocks, and re-renders pages on the same host, start conservatively on A1 with:
+
+```bash
+OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=1
+OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=6
+```
+
+Raise concurrency only after measuring CPU, RAM, and end-to-end latency on your chosen A1 allocation.
+
 ## Project Layout
 
 ```text

@@ -10,6 +10,7 @@ import gradio as gr
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.pipeline import PipelineRunner
+from openpdf2zh.utils.job_limiter import JobLimiter, QueueBusyError
 
 CSS = """
 .gradio-container {zoom: 0.8;}
@@ -298,6 +299,13 @@ def _run_pipeline_or_raise_gradio(
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     settings = settings or AppSettings.from_env()
+    job_limiter = JobLimiter(
+        max_concurrency=settings.job_queue_concurrency,
+        max_waiting=settings.job_queue_max_size,
+    )
+    job_submission_limit = (
+        settings.job_queue_concurrency + settings.job_queue_max_size + 2
+    )
     provider_choices = [("CTranslate2", "ctranslate2")]
     provider_values = [value for _, value in provider_choices]
     default_provider = (
@@ -487,29 +495,34 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 target_language,
             )
 
-            runner_settings = _build_runtime_settings(
-                settings,
-                provider,
-                settings.ctranslate2_model_dir,
-                settings.ctranslate2_tokenizer_path,
-                render_font_file,
-                adjust_render_letter_spacing_for_overlap,
-            )
-            runner = PipelineRunner(runner_settings)
+            try:
+                with job_limiter.acquire():
+                    runner_settings = _build_runtime_settings(
+                        settings,
+                        provider,
+                        settings.ctranslate2_model_dir,
+                        settings.ctranslate2_tokenizer_path,
+                        render_font_file,
+                        adjust_render_letter_spacing_for_overlap,
+                    )
+                    runner = PipelineRunner(runner_settings)
 
-            request = PipelineRequest(
-                input_pdf=Path(input_pdf),
-                target_language=target_language,
-                provider=provider,
-                model=default_model_for_provider(provider),
-                page_limit=_resolve_page_limit(page_mode),
-                font_size=settings.base_font_size,
-            )
-            result = _run_pipeline_or_raise_gradio(
-                runner,
-                request,
-                progress=progress,
-            )
+                    request = PipelineRequest(
+                        input_pdf=Path(input_pdf),
+                        target_language=target_language,
+                        provider=provider,
+                        model=default_model_for_provider(provider),
+                        page_limit=_resolve_page_limit(page_mode),
+                        font_size=settings.base_font_size,
+                    )
+                    result = _run_pipeline_or_raise_gradio(
+                        runner,
+                        request,
+                        progress=progress,
+                    )
+            except QueueBusyError as exc:
+                raise gr.Error(str(exc)) from exc
+
             translated_preview = _resolve_preview_state(
                 str(result.workspace.translated_pdf),
                 1,
@@ -668,7 +681,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 detected_page_label,
                 detected_boxes_preview,
             ],
-            concurrency_limit=1,
+            concurrency_limit=job_submission_limit,
         )
         translated_prev_page.click(
             fn=previous_translated_preview_page,
@@ -739,7 +752,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
 def launch() -> None:
     settings = AppSettings.from_env()
     demo = create_demo(settings)
-    demo.queue(default_concurrency_limit=1)
+    demo.queue(
+        default_concurrency_limit=settings.job_queue_concurrency,
+        max_size=(settings.job_queue_concurrency + settings.job_queue_max_size + 4),
+    )
     demo.launch(
         server_name=settings.host,
         server_port=settings.port,

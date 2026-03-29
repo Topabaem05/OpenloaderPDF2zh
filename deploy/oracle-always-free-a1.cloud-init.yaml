@@ -1,0 +1,142 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - git
+  - nginx
+  - python3
+  - python3-pip
+  - python3-venv
+  - build-essential
+  - openjdk-17-jre-headless
+  - fontconfig
+
+write_files:
+  - path: /etc/openpdf2zh.env
+    permissions: '0644'
+    content: |
+      OPENPDF2ZH_HOST=0.0.0.0
+      OPENPDF2ZH_PORT=7860
+      OPENPDF2ZH_WORKSPACE_ROOT=/var/lib/openpdf2zh/workspace
+      OPENPDF2ZH_DEFAULT_PROVIDER=ctranslate2
+      OPENPDF2ZH_DEFAULT_MODEL=auto
+      OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE=Simplified Chinese
+      OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=1
+      OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=6
+      OPENPDF2ZH_CTRANSLATE2_MODEL_DIR=/opt/openpdf2zh/models/ctranslate2
+      OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH=
+      OPENPDF2ZH_RENDER_FONT_PATH=
+      OPENPDF2ZH_ADJUST_RENDER_LETTER_SPACING_FOR_OVERLAP=true
+      PYTHONUNBUFFERED=1
+      GROQ_API_KEY=
+
+  - path: /usr/local/bin/bootstrap-openpdf2zh.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      APP_DIR=/opt/openpdf2zh_gradio
+      REPO_URL=https://github.com/Topabaem05/OpenloaderPDF2zh.git
+      APP_USER=ubuntu
+      APP_GROUP=ubuntu
+
+      mkdir -p /opt/openpdf2zh/models
+      mkdir -p /var/lib/openpdf2zh/workspace
+      mkdir -p /var/log/openpdf2zh
+
+      if [ ! -d "${APP_DIR}/.git" ]; then
+        git clone --branch main "${REPO_URL}" "${APP_DIR}"
+      else
+        git -C "${APP_DIR}" fetch --all --tags
+        git -C "${APP_DIR}" checkout main
+        git -C "${APP_DIR}" pull --ff-only origin main
+      fi
+
+      python3 -m venv "${APP_DIR}/.venv"
+      "${APP_DIR}/.venv/bin/pip" install --upgrade pip
+      "${APP_DIR}/.venv/bin/pip" install -e "${APP_DIR}"
+
+      chown -R "${APP_USER}:${APP_GROUP}" "${APP_DIR}"
+      chown -R "${APP_USER}:${APP_GROUP}" /opt/openpdf2zh
+      chown -R "${APP_USER}:${APP_GROUP}" /var/lib/openpdf2zh
+      chown -R "${APP_USER}:${APP_GROUP}" /var/log/openpdf2zh
+
+      systemctl daemon-reload
+      rm -f /etc/nginx/sites-enabled/default
+      ln -sf /etc/nginx/sites-available/openpdf2zh.conf /etc/nginx/sites-enabled/openpdf2zh.conf
+      nginx -t
+      systemctl enable nginx
+      systemctl restart nginx
+      systemctl enable openpdf2zh.service
+      systemctl restart openpdf2zh.service
+
+  - path: /etc/nginx/sites-available/openpdf2zh.conf
+    permissions: '0644'
+    content: |
+      server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        server_name _;
+
+        client_max_body_size 128m;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 900s;
+        proxy_read_timeout 900s;
+        send_timeout 900s;
+
+        location / {
+          proxy_pass http://127.0.0.1:7860;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+          proxy_buffering off;
+        }
+      }
+
+  - path: /etc/systemd/system/openpdf2zh.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=OpenPDF2ZH Gradio
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User=ubuntu
+      Group=ubuntu
+      WorkingDirectory=/opt/openpdf2zh_gradio
+      EnvironmentFile=/etc/openpdf2zh.env
+      ExecStart=/opt/openpdf2zh_gradio/.venv/bin/python app.py
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=full
+      ProtectHome=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+      ReadWritePaths=/opt/openpdf2zh_gradio /var/lib/openpdf2zh /var/log/openpdf2zh
+      StateDirectory=openpdf2zh
+      LogsDirectory=openpdf2zh
+      UMask=0027
+      LimitNOFILE=65535
+      Restart=always
+      RestartSec=5
+      StandardOutput=append:/var/log/openpdf2zh/app.log
+      StandardError=append:/var/log/openpdf2zh/app.log
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - /usr/local/bin/bootstrap-openpdf2zh.sh
+  - systemctl status --no-pager nginx
+  - systemctl status --no-pager openpdf2zh.service
+
+final_message: "OpenPDF2ZH bootstrap finished. Open TCP 80 in your OCI security list to reach the nginx reverse proxy."

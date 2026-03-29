@@ -28,6 +28,8 @@ class AppSettings:
     base_font_size: float = 10.0
     render_font_path: str = ""
     adjust_render_letter_spacing_for_overlap: bool = True
+    job_queue_concurrency: int = 2
+    job_queue_max_size: int = 8
     ctranslate2_model_dir: str = ""
     ctranslate2_tokenizer_path: str = ""
     groq_api_key: str = ""
@@ -65,6 +67,14 @@ class AppSettings:
             adjust_render_letter_spacing_for_overlap=_as_bool(
                 os.getenv("OPENPDF2ZH_ADJUST_RENDER_LETTER_SPACING_FOR_OVERLAP"),
                 default=True,
+            ),
+            job_queue_concurrency=max(
+                int(os.getenv("OPENPDF2ZH_JOB_QUEUE_CONCURRENCY", "2")),
+                1,
+            ),
+            job_queue_max_size=max(
+                int(os.getenv("OPENPDF2ZH_JOB_QUEUE_MAX_SIZE", "8")),
+                1,
             ),
             ctranslate2_model_dir=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", ""
