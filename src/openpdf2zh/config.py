@@ -42,9 +42,17 @@ class AppSettings:
 
     @classmethod
     def from_env(cls) -> "AppSettings":
+        railway_port = os.getenv("PORT")
+        if railway_port:
+            host = "0.0.0.0"
+            port = int(railway_port)
+        else:
+            host = os.getenv("OPENPDF2ZH_HOST", "127.0.0.1")
+            port = int(os.getenv("OPENPDF2ZH_PORT", "7860"))
+
         return cls(
-            host=os.getenv("OPENPDF2ZH_HOST", "127.0.0.1"),
-            port=int(os.getenv("OPENPDF2ZH_PORT", "7860")),
+            host=host,
+            port=port,
             workspace_root=Path(
                 os.getenv("OPENPDF2ZH_WORKSPACE_ROOT", "workspace")
             ).resolve(),

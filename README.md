@@ -36,6 +36,15 @@ python -m pip install -U "opendataloader-pdf"
 
 Upstream project: <https://github.com/opendataloader-project/opendataloader-pdf>
 
+## Railway deployment
+
+This repository now includes `railway.json` with:
+
+- build command: `pip install -r requirements.txt`
+- start command: `python app.py`
+
+At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
+
 ## Requirements
 
 - Python 3.10+
