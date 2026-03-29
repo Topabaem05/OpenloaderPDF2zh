@@ -5,5 +5,8 @@ NIXPACKS_PYTHON_PACKAGE_MANAGER = "requirements"
 [phases.setup]
 aptPkgs = ["...", "git", "git-lfs", "openjdk-17-jre-headless"]
 
+[phases.build]
+cmds = ["bash scripts/railway-build.sh"]
+
 [start]
 cmd = "python app.py"

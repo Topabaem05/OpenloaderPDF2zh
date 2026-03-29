@@ -1,8 +1,5 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": {
-    "buildCommand": "bash scripts/railway-build.sh"
-  },
   "deploy": {
     "startCommand": "python app.py",
     "restartPolicyType": "ON_FAILURE",

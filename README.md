@@ -38,14 +38,15 @@ Upstream project: <https://github.com/opendataloader-project/opendataloader-pdf>
 
 ## Railway deployment
 
-This repository now includes `railway.json` with:
+This repository now includes:
 
-- build command: `pip install -r requirements.txt`
-- start command: `python app.py`
+- `railway.json` for the start command: `python app.py`
+- `railpack.json` for Railway's default Railpack builder
+- `nixpacks.toml` for Nixpacks builds
 
 At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
 
-It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-17-jre-headless`) and Git LFS tooling for OpenDataLoader-PDF parsing and quickmt model materialization.
+Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries from Git LFS before the app starts.
 
 ## Requirements
 
