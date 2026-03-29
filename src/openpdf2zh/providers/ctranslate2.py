@@ -36,6 +36,9 @@ class CTranslate2Translator(BaseTranslator):
                 raise RuntimeError(
                     f"CTranslate2 tokenizer model was not found: {tokenizer_model_path}. Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
                 )
+        pointer_model = self._first_directional_lfs_pointer()
+        if pointer_model is not None:
+            self._raise_for_lfs_pointer(pointer_model)
         if not self._directional_assets_ready() and not self._tokenizer_path:
             raise RuntimeError(
                 "CTranslate2 tokenizer model is missing. Set OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH or provide directional model subdirectories."
@@ -131,6 +134,7 @@ class CTranslate2Translator(BaseTranslator):
 
         if model_dir_name not in self._translator_cache:
             model_dir = self._directional_root_dir() / model_dir_name
+            self._raise_for_lfs_pointer(model_dir / "model.bin")
             self._translator_cache[model_dir_name] = ctranslate2.Translator(
                 str(model_dir), device="cpu"
             )
@@ -151,6 +155,12 @@ class CTranslate2Translator(BaseTranslator):
         directional_root = self._directional_root_dir()
         return all(
             (directional_root / model_dir_name / required_file).exists()
+            and not (
+                required_file == "model.bin"
+                and self._is_lfs_pointer(
+                    directional_root / model_dir_name / required_file
+                )
+            )
             for model_dir_name in self.DIRECTIONAL_MODEL_DIRS.values()
             for required_file in ("model.bin", "src.spm.model", "tgt.spm.model")
         )
@@ -159,6 +169,29 @@ class CTranslate2Translator(BaseTranslator):
         if self._model_root.name in self.DIRECTIONAL_MODEL_DIRS.values():
             return self._model_root.parent
         return self._model_root
+
+    def _first_directional_lfs_pointer(self) -> Path | None:
+        directional_root = self._directional_root_dir()
+        for model_dir_name in self.DIRECTIONAL_MODEL_DIRS.values():
+            candidate = directional_root / model_dir_name / "model.bin"
+            if self._is_lfs_pointer(candidate):
+                return candidate
+        return None
+
+    def _raise_for_lfs_pointer(self, path: Path) -> None:
+        if self._is_lfs_pointer(path):
+            raise RuntimeError(
+                f"CTranslate2 model file is still a Git LFS pointer, not the real binary: {path}. "
+                "On Railway, either provide real local model files in the image or use the Groq service instead."
+            )
+
+    def _is_lfs_pointer(self, path: Path) -> bool:
+        try:
+            with path.open("rb") as handle:
+                first_line = handle.readline()
+        except OSError:
+            return False
+        return first_line.startswith(b"version https://git-lfs.github.com/spec/v1")
 
     def _resolve_target_language_tag(self, target_language: str) -> str:
         try:

@@ -13,14 +13,30 @@ def _default_ctranslate2_model_dir() -> str:
     return str(Path(__file__).resolve().parents[2] / "models")
 
 
+def _is_lfs_pointer(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with path.open("rb") as handle:
+            first_line = handle.readline()
+    except OSError:
+        return False
+    return first_line.startswith(b"version https://git-lfs.github.com/spec/v1")
+
+
 def _has_local_ctranslate2_models(model_dir: str) -> bool:
     model_root = Path(model_dir).expanduser()
     if not model_root.is_dir():
         return False
     directional_dirs = ("quickmt-ko-en", "quickmt-en-ko")
-    if all((model_root / name / "model.bin").exists() for name in directional_dirs):
+    if all(
+        (model_root / name / "model.bin").exists()
+        and not _is_lfs_pointer(model_root / name / "model.bin")
+        for name in directional_dirs
+    ):
         return True
-    return (model_root / "model.bin").exists()
+    model_bin = model_root / "model.bin"
+    return model_bin.exists() and not _is_lfs_pointer(model_bin)
 
 
 def _default_provider_from_env(
@@ -28,18 +44,37 @@ def _default_provider_from_env(
     groq_api_key: str,
     ctranslate2_model_dir: str,
 ) -> str:
-    if configured_provider:
-        return configured_provider.strip().lower()
-    if groq_api_key.strip() and not _has_local_ctranslate2_models(
-        ctranslate2_model_dir
-    ):
+    configured = configured_provider.strip().lower() if configured_provider else ""
+    has_groq = bool(groq_api_key.strip())
+    has_local_ctranslate2 = _has_local_ctranslate2_models(ctranslate2_model_dir)
+
+    if configured == "groq" and has_groq:
+        return "groq"
+    if configured == "ctranslate2" and has_local_ctranslate2:
+        return "ctranslate2"
+    if configured and configured not in {"groq", "ctranslate2"}:
+        return configured
+    if has_groq and not has_local_ctranslate2:
         return "groq"
     return "ctranslate2"
 
 
-def _default_model_for_provider(provider: str, configured_model: str | None) -> str:
-    if configured_model:
-        return configured_model.strip()
+def _default_model_for_provider(
+    provider: str,
+    configured_model: str | None,
+    configured_provider: str | None,
+) -> str:
+    configured_provider_value = (
+        configured_provider.strip().lower() if configured_provider else ""
+    )
+    configured_model_value = configured_model.strip() if configured_model else ""
+
+    if provider == "groq":
+        if configured_provider_value == "groq" and configured_model_value:
+            return configured_model_value
+        return "llama-3.3-70b-versatile"
+    if configured_model_value:
+        return configured_model_value
     if provider == "groq":
         return "llama-3.3-70b-versatile"
     return "auto"
@@ -86,8 +121,10 @@ class AppSettings:
             _default_ctranslate2_model_dir(),
         ).strip()
         groq_api_key = os.getenv("GROQ_API_KEY", "")
+        configured_provider = os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER")
+        configured_model = os.getenv("OPENPDF2ZH_DEFAULT_MODEL")
         default_provider = _default_provider_from_env(
-            os.getenv("OPENPDF2ZH_DEFAULT_PROVIDER"),
+            configured_provider,
             groq_api_key,
             ctranslate2_model_dir,
         )
@@ -101,7 +138,8 @@ class AppSettings:
             default_provider=default_provider,
             default_model=_default_model_for_provider(
                 default_provider,
-                os.getenv("OPENPDF2ZH_DEFAULT_MODEL"),
+                configured_model,
+                configured_provider,
             ),
             default_target_language=os.getenv(
                 "OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE", "Simplified Chinese"

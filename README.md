@@ -55,6 +55,8 @@ It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-
 
 If the app is deployed without local CTranslate2 model files, set `GROQ_API_KEY`. The app will automatically prefer Groq when no local CTranslate2 model directory is available.
 
+If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. In that case, either ship the real model artifacts in the image/volume or use Groq as the deployment fallback.
+
 ## Local CTranslate2
 
 If you want to run translation locally, provide a converted CTranslate2 model directory and its SentencePiece tokenizer model.
