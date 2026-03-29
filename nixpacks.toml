@@ -1,0 +1,9 @@
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.11"
+NIXPACKS_PYTHON_PACKAGE_MANAGER = "requirements"
+
+[phases.setup]
+aptPkgs = ["...", "openjdk-17-jre-headless"]
+
+[start]
+cmd = "python app.py"

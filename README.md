@@ -45,6 +45,8 @@ This repository now includes `railway.json` with:
 
 At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
 
+It also includes `nixpacks.toml` so Railway/Nixpacks installs Java 17 (`openjdk-17-jre-headless`) for OpenDataLoader-PDF parsing.
+
 ## Requirements
 
 - Python 3.10+
