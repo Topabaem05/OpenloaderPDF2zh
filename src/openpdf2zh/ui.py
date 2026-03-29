@@ -120,6 +120,14 @@ CTRANSLATE2_TARGET_LANGUAGE_CHOICES = ["English", "Korean"]
 
 MAX_INPUT_PDF_BYTES = 50 * 1024 * 1024
 
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
+
 
 def _build_runtime_settings(
     settings: AppSettings,
@@ -527,13 +535,13 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 raise gr.Error(str(exc)) from exc
 
             translated_preview = _resolve_preview_state(
-                str(result.workspace.translated_pdf),
+                str(result.workspace.public_translated_pdf),
                 1,
                 "Translated PDF preview will appear here.",
                 "Translated PDF preview",
             )
             detected_preview = _resolve_preview_state(
-                str(result.workspace.detected_boxes_pdf),
+                str(result.workspace.public_detected_boxes_pdf),
                 1,
                 "Detected text boxes preview will appear here.",
                 "Detected text boxes preview",
@@ -541,11 +549,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             return (
                 result.generated_files(),
                 "",
-                str(result.workspace.translated_pdf),
+                str(result.workspace.public_translated_pdf),
                 translated_preview[1],
                 translated_preview[2],
                 translated_preview[0],
-                str(result.workspace.detected_boxes_pdf),
+                str(result.workspace.public_detected_boxes_pdf),
                 detected_preview[1],
                 detected_preview[2],
                 detected_preview[0],
@@ -760,6 +768,19 @@ def launch() -> None:
         settings.workspace_cleanup_interval_seconds,
     )
     demo = create_demo(settings)
+
+    @demo.app.middleware("http")
+    async def add_security_headers(request, call_next):
+        response = await call_next(request)
+        for key, value in SECURITY_HEADERS.items():
+            response.headers[key] = value
+        forwarded_proto = request.headers.get("x-forwarded-proto", "")
+        if request.url.scheme == "https" or "https" in forwarded_proto.lower():
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains"
+            )
+        return response
+
     demo.queue(
         default_concurrency_limit=settings.job_queue_concurrency,
         max_size=(settings.job_queue_concurrency + settings.job_queue_max_size + 4),
@@ -767,7 +788,8 @@ def launch() -> None:
     demo.launch(
         server_name=settings.host,
         server_port=settings.port,
-        allowed_paths=[str(settings.workspace_root)],
+        allowed_paths=[str(settings.public_root)],
         theme=gr.themes.Soft(),
         css=CSS,
+        max_file_size="50mb",
     )

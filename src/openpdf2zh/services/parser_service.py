@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import warnings
 from pathlib import Path
 
@@ -92,6 +93,7 @@ class ParserService:
             deflate=True,
             clean=True,
         )
+        shutil.copy2(workspace.detected_boxes_pdf, workspace.public_detected_boxes_pdf)
         append_run_log(
             workspace.run_log,
             f"parser=detected_boxes_preview {workspace.detected_boxes_pdf}",

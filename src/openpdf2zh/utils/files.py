@@ -32,7 +32,9 @@ def ensure_dir(path: Path) -> Path:
 
 def prepare_workspace(root: Path, source_pdf: Path) -> JobWorkspace:
     job_id = make_job_id(source_pdf.stem)
+    public_root = ensure_dir(root / "public")
     workspace_dir = ensure_dir(root / job_id)
+    public_dir = ensure_dir(public_root / job_id)
     input_dir = ensure_dir(workspace_dir / "input")
     parsed_dir = ensure_dir(workspace_dir / "parsed")
     output_dir = ensure_dir(workspace_dir / "output")
@@ -42,6 +44,7 @@ def prepare_workspace(root: Path, source_pdf: Path) -> JobWorkspace:
     return JobWorkspace(
         job_id=job_id,
         root=workspace_dir,
+        public_dir=public_dir,
         input_pdf=copied_pdf,
         parsed_dir=parsed_dir,
         output_dir=output_dir,
@@ -51,7 +54,9 @@ def prepare_workspace(root: Path, source_pdf: Path) -> JobWorkspace:
         structured_json=output_dir / "structured.json",
         translated_markdown=output_dir / "result.md",
         translated_pdf=output_dir / "translated_mono.pdf",
+        public_translated_pdf=public_dir / "translated_mono.pdf",
         detected_boxes_pdf=output_dir / "detected_boxes.pdf",
+        public_detected_boxes_pdf=public_dir / "detected_boxes.pdf",
         translation_units_jsonl=output_dir / "translation_units.jsonl",
         render_report_json=output_dir / "render_report.json",
         run_log=logs_dir / "run.log",
@@ -89,10 +94,16 @@ def cleanup_expired_workspaces(root: Path, retention_seconds: float) -> list[Pat
 
     cutoff = time.time() - retention_seconds
     deleted: list[Path] = []
+    public_root = root / "public"
     for workspace_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        if workspace_dir.name == "public":
+            continue
         if _latest_workspace_mtime(workspace_dir) >= cutoff:
             continue
         shutil.rmtree(workspace_dir)
+        public_dir = public_root / workspace_dir.name
+        if public_dir.exists():
+            shutil.rmtree(public_dir)
         deleted.append(workspace_dir)
     return deleted
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,7 @@ class RenderService:
             deflate=True,
             clean=True,
         )
+        shutil.copy2(workspace.translated_pdf, workspace.public_translated_pdf)
         write_json(workspace.render_report_json, {"overflow": overflow})
         append_run_log(workspace.run_log, "render=artifacts:done")
         return len(overflow)

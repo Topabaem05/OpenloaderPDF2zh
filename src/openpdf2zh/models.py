@@ -34,6 +34,7 @@ class TranslationUnit:
 class JobWorkspace:
     job_id: str
     root: Path
+    public_dir: Path
     input_pdf: Path
     parsed_dir: Path
     output_dir: Path
@@ -43,7 +44,9 @@ class JobWorkspace:
     structured_json: Path
     translated_markdown: Path
     translated_pdf: Path
+    public_translated_pdf: Path
     detected_boxes_pdf: Path
+    public_detected_boxes_pdf: Path
     translation_units_jsonl: Path
     render_report_json: Path
     run_log: Path
@@ -64,6 +67,6 @@ class PipelineResult:
         return self.workspace.root
 
     def generated_files(self) -> list[str]:
-        if self.workspace.translated_pdf.exists():
-            return [str(self.workspace.translated_pdf)]
+        if self.workspace.public_translated_pdf.exists():
+            return [str(self.workspace.public_translated_pdf)]
         return []

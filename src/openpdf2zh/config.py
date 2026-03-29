@@ -85,6 +85,10 @@ class AppSettings:
     ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
 
+    @property
+    def public_root(self) -> Path:
+        return self.workspace_root / "public"
+
     @classmethod
     def from_env(cls) -> "AppSettings":
         railway_port = os.getenv("PORT")
