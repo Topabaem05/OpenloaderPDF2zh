@@ -4,8 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
-import fitz
 import gradio as gr
+import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest

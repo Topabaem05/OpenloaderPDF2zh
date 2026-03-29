@@ -4,7 +4,7 @@ import json
 import warnings
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest

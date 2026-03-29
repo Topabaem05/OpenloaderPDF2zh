@@ -9,7 +9,7 @@ This file combines the product constraints in `agent.md` with commands and code 
 - Packaging: setuptools via `pyproject.toml`
 - Source root: `src/`
 - Entrypoint: `python app.py`
-- Tests: `pytest`
+- Tests: no checked-in test suite
 - Lint: `ruff`
 ## Hard constraints
 - Keep the project Python-only.
@@ -28,7 +28,6 @@ This file combines the product constraints in `agent.md` with commands and code 
 - `src/openpdf2zh/services/*.py`: parser, translation, rendering.
 - `src/openpdf2zh/providers/*.py`: thin provider wrappers.
 - `src/openpdf2zh/utils/files.py`: workspace and file helpers.
-- `tests/`: pytest tests.
 - `agent.md`: existing repo-specific agent guidance.
 ## Commands
 Setup and install:
@@ -42,19 +41,13 @@ Run app:
 ```bash
 python app.py
 ```
-Test commands (use `PYTHONPATH=src` from a source checkout):
-```bash
-PYTHONPATH=src python -m pytest
-PYTHONPATH=src python -m pytest tests/test_models.py
-PYTHONPATH=src python -m pytest tests/test_models.py::test_pipeline_request_fields
-```
 Lint commands:
 ```bash
-python -m ruff check src tests
+python -m ruff check src
 python -m ruff check .
 ```
 Notes:
-- `python -m ruff check src tests` is currently clean.
+- `python -m ruff check src` is currently clean.
 - `python -m ruff check .` currently reports `E402` in `app.py` because `sys.path` is modified before the local import.
 - There is no dedicated build script; editable install is the normal packaging workflow:
 ```bash
@@ -62,8 +55,7 @@ pip install -e .
 ```
 ## Verified repo facts
 - `pyproject.toml` defines setuptools package discovery under `src`.
-- `pyproject.toml` sets pytest `testpaths = ["tests"]`.
-- Dev dependencies currently include `pytest` and `ruff`.
+- Dev dependencies currently include `ruff`.
 - No `Makefile` was found.
 - No `.cursorrules` or `.cursor/rules/` files were found.
 - No `.github/copilot-instructions.md` file was found.
@@ -133,12 +125,6 @@ Follow the order used in `config.py`, `translation_service.py`, and `ui.py`:
 - Keep workspaces under `workspace/<job_id>/`.
 - Preserve subdirectories: `input/`, `parsed/`, `output/`, `logs/`.
 - Preserve output filenames because downstream tooling may depend on them.
-### Testing style
-- Tests are simple pytest functions with plain `assert` statements.
-- Put new tests under `tests/`.
-- Prefer focused unit tests.
-- Mirror the target module name when reasonable.
-- Test defaults, transformations, and failure paths directly.
 ## UX guidance from `agent.md`
 - Keep the workflow calm, linear, and single-page.
 - Prefer `gr.Blocks` over unnecessary navigation complexity.
@@ -153,8 +139,8 @@ Follow the order used in `config.py`, `translation_service.py`, and `ui.py`:
 - hardcoded provider/model choices in the UI layer
 ## Definition of done
 Before considering a task complete:
-1. Run relevant pytest commands.
-2. Run `python -m ruff check src tests` for Python changes.
+1. Run `python -m ruff check src` for Python changes.
+2. Run any targeted runtime/import verification needed for the affected code paths.
 3. Keep the Python-only constraint intact.
 4. Preserve artifact names and workspace layout.
 5. Keep errors actionable and user-facing.

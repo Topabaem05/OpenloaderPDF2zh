@@ -110,6 +110,7 @@ openpdf2zh_gradio/
 ├─ agent.md
 ├─ pyproject.toml
 ├─ .env.example
+├─ requirements.txt
 ├─ src/openpdf2zh/
 │  ├─ config.py
 │  ├─ models.py
@@ -125,7 +126,6 @@ openpdf2zh_gradio/
 │  │  └─ translation_service.py
 │  └─ utils/
 │     └─ files.py
-└─ tests/
 ```
 
 ## Notes

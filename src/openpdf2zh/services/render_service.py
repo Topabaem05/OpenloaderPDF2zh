@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import fitz
+import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
