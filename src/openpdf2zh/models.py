@@ -64,15 +64,6 @@ class PipelineResult:
         return self.workspace.root
 
     def generated_files(self) -> list[str]:
-        ordered = [
-            self.workspace.translated_pdf,
-            self.workspace.detected_boxes_pdf,
-            self.workspace.structured_json,
-            self.workspace.translated_markdown,
-            self.workspace.translation_units_jsonl,
-            self.workspace.run_log,
-            self.workspace.render_report_json,
-            self.workspace.raw_json,
-            self.workspace.raw_markdown,
-        ]
-        return [str(path) for path in ordered if path.exists()]
+        if self.workspace.translated_pdf.exists():
+            return [str(self.workspace.translated_pdf)]
+        return []

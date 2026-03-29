@@ -118,6 +118,8 @@ TARGET_LANGUAGE_CHOICES = [
 
 CTRANSLATE2_TARGET_LANGUAGE_CHOICES = ["English", "Korean"]
 
+MAX_INPUT_PDF_BYTES = 50 * 1024 * 1024
+
 
 def _build_runtime_settings(
     settings: AppSettings,
@@ -332,6 +334,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 input_pdf = gr.File(
                     label="Input PDF",
                     file_count="single",
+                    file_types=[".pdf"],
                     type="filepath",
                 )
                 with gr.Column(elem_classes=["control-panel"]):
@@ -472,10 +475,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                     generated_files = gr.File(
                         label="Generated files",
                     )
-                workspace_path = gr.Textbox(
-                    label="Workspace folder",
-                    interactive=False,
-                )
+                workspace_path = gr.State(value="")
 
         def run_job(
             input_pdf: str | None,
@@ -489,6 +489,8 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
         ) -> tuple[list[str], str, str, int, str, str, str, int, str, str]:
             if not input_pdf:
                 raise gr.Error("Please upload a PDF file first.")
+            if Path(input_pdf).stat().st_size > MAX_INPUT_PDF_BYTES:
+                raise gr.Error("PDF files up to 50MB are supported.")
 
             _ = source_language
             target_language = _normalize_target_language_for_provider(
@@ -538,7 +540,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             )
             return (
                 result.generated_files(),
-                str(result.workspace_dir),
+                "",
                 str(result.workspace.translated_pdf),
                 translated_preview[1],
                 translated_preview[2],
