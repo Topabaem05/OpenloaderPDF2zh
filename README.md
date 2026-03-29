@@ -46,7 +46,12 @@ This repository now includes:
 
 At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
 
-Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries from Git LFS before the app starts.
+Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries before the app starts.
+
+For private repositories on Railway, set one of these environment variables:
+
+- `OPENPDF2ZH_MODEL_BUNDLE_URL` (+ optional `OPENPDF2ZH_MODEL_BUNDLE_SHA256`) to download a versioned tarball of `quickmt-ko-en/` and `quickmt-en-ko/`
+- or `OPENPDF2ZH_MODEL_REPO_TOKEN` / `GITHUB_TOKEN` so the build can clone the repo and run `git lfs pull`
 
 ## Requirements
 
@@ -54,7 +59,7 @@ Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsin
 - Java 11+
 - Local CTranslate2 model files for translation
 
-If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository now includes a Railway build-time model materialization step so the real quickmt binaries are fetched into the image before the app starts.
+If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository includes a Railway build-time model materialization step so the real quickmt binaries are fetched into the image before the app starts.
 
 ## Local CTranslate2
 
