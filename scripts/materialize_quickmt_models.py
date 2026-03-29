@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
 import tarfile
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
@@ -52,15 +53,58 @@ def build_repo_url(repo_url: str) -> str:
 
 
 def download_model_bundle(bundle_url: str, destination: Path) -> None:
-    request = Request(bundle_url)
     token = os.getenv("OPENPDF2ZH_MODEL_REPO_TOKEN") or os.getenv("GITHUB_TOKEN")
+    resolved_url = resolve_github_release_asset_api_url(bundle_url, token)
+
+    request = Request(resolved_url)
     if token:
         request.add_header("Authorization", f"Bearer {token}")
-    if "github.com" in bundle_url and "/releases/assets/" in bundle_url:
+    if "/releases/assets/" in resolved_url:
         request.add_header("Accept", "application/octet-stream")
 
     with urlopen(request, timeout=120) as response, destination.open("wb") as handle:
         shutil.copyfileobj(response, handle)
+
+
+def resolve_github_release_asset_api_url(bundle_url: str, token: str | None) -> str:
+    parsed = urlparse(bundle_url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if parsed.netloc != "github.com":
+        return bundle_url
+    if len(path_parts) < 6 or path_parts[2:4] != ["releases", "download"]:
+        return bundle_url
+    if not token:
+        raise RuntimeError(
+            "The configured quickmt bundle URL points to a GitHub release asset on github.com. "
+            "If the repository is private, also set OPENPDF2ZH_MODEL_REPO_TOKEN or GITHUB_TOKEN so the build can resolve the asset through the GitHub API."
+        )
+
+    owner, repo_name = path_parts[0], path_parts[1]
+    tag = path_parts[4]
+    asset_name = "/".join(path_parts[5:])
+    release_api = (
+        f"https://api.github.com/repos/{owner}/{repo_name}/releases/tags/{tag}"
+    )
+    request = Request(release_api)
+    request.add_header("Authorization", f"Bearer {token}")
+    request.add_header("Accept", "application/vnd.github+json")
+
+    try:
+        with urlopen(request, timeout=120) as response:
+            payload = json.load(response)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to resolve GitHub release metadata for {bundle_url}. "
+            "Check OPENPDF2ZH_MODEL_REPO_TOKEN/GITHUB_TOKEN permissions and the release tag."
+        ) from exc
+
+    for asset in payload.get("assets", []):
+        if asset.get("name") == asset_name:
+            return str(asset.get("url"))
+
+    raise RuntimeError(
+        f"Could not find a GitHub release asset named {asset_name!r} under tag {tag!r}."
+    )
 
 
 def verify_sha256(path: Path, expected_sha256: str) -> None:

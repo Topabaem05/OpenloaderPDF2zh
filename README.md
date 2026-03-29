@@ -53,6 +53,8 @@ For private repositories on Railway, set one of these environment variables:
 - `OPENPDF2ZH_MODEL_BUNDLE_URL` (+ optional `OPENPDF2ZH_MODEL_BUNDLE_SHA256`) to download a versioned tarball of `quickmt-ko-en/` and `quickmt-en-ko/`
 - or `OPENPDF2ZH_MODEL_REPO_TOKEN` / `GITHUB_TOKEN` so the build can clone the repo and run `git lfs pull`
 
+If `OPENPDF2ZH_MODEL_BUNDLE_URL` is a private GitHub release asset URL like `https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`, also set `OPENPDF2ZH_MODEL_REPO_TOKEN` or `GITHUB_TOKEN`. The build now resolves that browser URL to the GitHub Releases API asset endpoint automatically.
+
 ## Requirements
 
 - Python 3.10+
