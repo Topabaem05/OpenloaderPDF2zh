@@ -1,4 +1,4 @@
-from openpdf2zh.config import AppSettings
+from openpdf2zh.config import AppSettings, _default_ctranslate2_model_dir
 
 
 def test_app_settings_reads_render_env(monkeypatch) -> None:
@@ -35,6 +35,14 @@ def test_app_settings_supports_legacy_overlap_threshold_env(monkeypatch) -> None
     settings = AppSettings.from_env()
 
     assert settings.duplicate_box_iom_threshold == 0.93
+
+
+def test_app_settings_uses_repo_models_dir_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", raising=False)
+
+    settings = AppSettings.from_env()
+
+    assert settings.ctranslate2_model_dir == _default_ctranslate2_model_dir()
 
 
 def test_app_settings_supports_legacy_duplicate_threshold_env(monkeypatch) -> None:

@@ -130,7 +130,7 @@ class CTranslate2Translator(BaseTranslator):
             ) from exc
 
         if model_dir_name not in self._translator_cache:
-            model_dir = self._model_root / model_dir_name
+            model_dir = self._directional_root_dir() / model_dir_name
             self._translator_cache[model_dir_name] = ctranslate2.Translator(
                 str(model_dir), device="cpu"
             )
@@ -148,11 +148,17 @@ class CTranslate2Translator(BaseTranslator):
         )
 
     def _directional_assets_ready(self) -> bool:
+        directional_root = self._directional_root_dir()
         return all(
-            (self._model_root / model_dir_name / required_file).exists()
+            (directional_root / model_dir_name / required_file).exists()
             for model_dir_name in self.DIRECTIONAL_MODEL_DIRS.values()
             for required_file in ("model.bin", "src.spm.model", "tgt.spm.model")
         )
+
+    def _directional_root_dir(self) -> Path:
+        if self._model_root.name in self.DIRECTIONAL_MODEL_DIRS.values():
+            return self._model_root.parent
+        return self._model_root
 
     def _resolve_target_language_tag(self, target_language: str) -> str:
         try:

@@ -175,3 +175,34 @@ def test_ctranslate2_reports_unsupported_directional_target_language(
         translator.translate(
             "안녕하세요", target_language="Simplified Chinese", model="auto"
         )
+
+
+def test_ctranslate2_accepts_direct_quickmt_model_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    root_dir = tmp_path / "models"
+    ko_en = root_dir / "quickmt-ko-en"
+    en_ko = root_dir / "quickmt-en-ko"
+    for model_dir in (ko_en, en_ko):
+        model_dir.mkdir(parents=True)
+        (model_dir / "model.bin").write_text("fake", encoding="utf-8")
+        (model_dir / "src.spm.model").write_text("fake", encoding="utf-8")
+        (model_dir / "tgt.spm.model").write_text("fake", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "openpdf2zh.providers.ctranslate2.ctranslate2.Translator",
+        _DirectionalFakeTranslator,
+    )
+    monkeypatch.setattr(
+        "openpdf2zh.providers.ctranslate2.spm.SentencePieceProcessor",
+        _DirectionalSentencePiece,
+    )
+
+    translator = CTranslate2Translator(str(ko_en), "")
+
+    translated = translator.translate(
+        "Hello world", target_language="Korean", model="auto"
+    )
+
+    assert translated == "안녕 하세요"

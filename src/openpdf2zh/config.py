@@ -9,6 +9,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _default_ctranslate2_model_dir() -> str:
+    return str(Path(__file__).resolve().parents[2] / "models")
+
+
 def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
@@ -32,7 +36,7 @@ class AppSettings:
     job_queue_max_size: int = 8
     workspace_retention_hours: float = 24.0
     workspace_cleanup_interval_seconds: float = 600.0
-    ctranslate2_model_dir: str = ""
+    ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
     groq_api_key: str = ""
 
@@ -92,7 +96,8 @@ class AppSettings:
                 30.0,
             ),
             ctranslate2_model_dir=os.getenv(
-                "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR", ""
+                "OPENPDF2ZH_CTRANSLATE2_MODEL_DIR",
+                _default_ctranslate2_model_dir(),
             ).strip(),
             ctranslate2_tokenizer_path=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH", ""

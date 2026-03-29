@@ -49,7 +49,7 @@ If you want to run translation locally, provide a converted CTranslate2 model di
 Environment variables:
 
 ```bash
-OPENPDF2ZH_CTRANSLATE2_MODEL_DIR=/absolute/path/to/ctranslate2_model
+OPENPDF2ZH_CTRANSLATE2_MODEL_DIR=/absolute/path/to/models
 OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH=/absolute/path/to/tokenizer.model
 ```
 
@@ -61,6 +61,8 @@ The app also supports a directional model root that contains:
 - `quickmt-en-ko/`
 
 In that layout, each subdirectory should contain `model.bin`, `src.spm.model`, and `tgt.spm.model`, and `OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH` can be left blank.
+
+If `OPENPDF2ZH_CTRANSLATE2_MODEL_DIR` is not set, the app now defaults to the repository-local `./models` directory, which is safer for deployed server environments that run the app from the project root.
 
 ## Rendering notes
 
