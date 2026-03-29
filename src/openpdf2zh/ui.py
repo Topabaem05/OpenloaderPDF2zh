@@ -384,6 +384,9 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         ],
                         value="first",
                     )
+                    gr.Markdown(
+                        '<div class="hint">All 선택 시 PDF는 50MB를 초과할 수 없습니다.</div>'
+                    )
                 with gr.Accordion("Render options", open=False):
                     render_font_file = gr.File(
                         label="Custom render font file (optional)",
