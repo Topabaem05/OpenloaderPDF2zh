@@ -19,6 +19,20 @@ from openpdf2zh.utils.job_limiter import JobLimiter, QueueBusyError
 CSS = """
 .gradio-container {zoom: 0.8;}
 .app-shell {max-width: 1200px; margin: 0 auto 12px 0; text-align: left;}
+.title-row {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.title-text {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 700;
+}
+.bmc-slot {
+  display: flex;
+  justify-content: flex-end;
+}
 .hint {color: #4b5563; font-size: 0.95rem;}
 .control-panel {
   border: 1px solid #e5e7eb;
@@ -135,6 +149,12 @@ ADSENSE_HEAD = """
 <script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579\"
      crossorigin=\"anonymous\"></script>
 <meta name=\"google-adsense-account\" content=\"ca-pub-5911950308781579\">
+"""
+
+BMC_BUTTON_HTML = """
+<div class=\"bmc-slot\">
+  <script type=\"text/javascript\" src=\"https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js\" data-name=\"bmc-button\" data-slug=\"choijjs83q\" data-color=\"#5F7FFF\" data-emoji=\"\" data-font=\"Lato\" data-text=\"Buy me a coffee\" data-outline-color=\"#000000\" data-font-color=\"#ffffff\" data-coffee-color=\"#FFDD00\"></script>
+</div>
 """
 
 ADSENSE_ADS_TXT = "google.com, pub-5911950308781579, DIRECT, f08c47fec0942fa0\n"
@@ -342,12 +362,9 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
         return settings.default_model
 
     with gr.Blocks() as demo:
-        gr.Markdown(
-            """
-            # OpenPDF2ZH
-            """,
-            elem_classes=["app-shell"],
-        )
+        with gr.Row(elem_classes=["app-shell", "title-row"]):
+            gr.Markdown("<h1 class='title-text'>OpenPDF2ZH</h1>")
+            gr.HTML(BMC_BUTTON_HTML)
         with gr.Row(equal_height=False):
             with gr.Column(scale=4):
                 input_pdf = gr.File(
