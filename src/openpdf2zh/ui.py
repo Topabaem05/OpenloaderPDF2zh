@@ -149,13 +149,40 @@ ADSENSE_HEAD = """
 <script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579\"
      crossorigin=\"anonymous\"></script>
 <meta name=\"google-adsense-account\" content=\"ca-pub-5911950308781579\">
+<script>
+(() => {
+  function mountBmcButton() {
+    const slot = document.getElementById(\"bmc-button-slot\");
+    if (!slot || slot.dataset.bmcMounted === \"true\") {
+      return;
+    }
+    const script = document.createElement(\"script\");
+    script.type = \"text/javascript\";
+    script.src = \"https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js\";
+    script.setAttribute(\"data-name\", \"bmc-button\");
+    script.setAttribute(\"data-slug\", \"choijjs83q\");
+    script.setAttribute(\"data-color\", \"#FFDD00\");
+    script.setAttribute(\"data-emoji\", \"\");
+    script.setAttribute(\"data-font\", \"Lato\");
+    script.setAttribute(\"data-text\", \"Buy me a coffee\");
+    script.setAttribute(\"data-outline-color\", \"#000000\");
+    script.setAttribute(\"data-font-color\", \"#000000\");
+    script.setAttribute(\"data-coffee-color\", \"#ffffff\");
+    slot.dataset.bmcMounted = \"true\";
+    slot.appendChild(script);
+  }
+  if (document.readyState === \"loading\") {
+    document.addEventListener(\"DOMContentLoaded\", mountBmcButton, { once: true });
+  } else {
+    mountBmcButton();
+  }
+  const observer = new MutationObserver(() => mountBmcButton());
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
 """
 
-BMC_BUTTON_HTML = """
-<div class=\"bmc-slot\">
-  <script type=\"text/javascript\" src=\"https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js\" data-name=\"bmc-button\" data-slug=\"choijjs83q\" data-color=\"#5F7FFF\" data-emoji=\"\" data-font=\"Lato\" data-text=\"Buy me a coffee\" data-outline-color=\"#000000\" data-font-color=\"#ffffff\" data-coffee-color=\"#FFDD00\"></script>
-</div>
-"""
+BMC_BUTTON_HTML = '<div id="bmc-button-slot" class="bmc-slot"></div>'
 
 ADSENSE_ADS_TXT = "google.com, pub-5911950308781579, DIRECT, f08c47fec0942fa0\n"
 
