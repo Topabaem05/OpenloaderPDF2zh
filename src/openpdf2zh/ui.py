@@ -30,8 +30,16 @@ CSS = """
   font-weight: 700;
 }
 .bmc-slot {
-  display: flex;
-  justify-content: flex-end;
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+}
+.bmc-image {
+  display: block;
+  width: 260px;
+  max-width: 30vw;
+  height: auto;
 }
 .hint {color: #4b5563; font-size: 0.95rem;}
 .control-panel {
@@ -149,42 +157,27 @@ ADSENSE_HEAD = """
 <script async src=\"https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579\"
      crossorigin=\"anonymous\"></script>
 <meta name=\"google-adsense-account\" content=\"ca-pub-5911950308781579\">
-<script>
-(() => {
-  function mountBmcButton() {
-    const slot = document.getElementById(\"bmc-button-slot\");
-    if (!slot || slot.dataset.bmcMounted === \"true\") {
-      return;
-    }
-    const script = document.createElement(\"script\");
-    script.type = \"text/javascript\";
-    script.src = \"https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js\";
-    script.setAttribute(\"data-name\", \"bmc-button\");
-    script.setAttribute(\"data-slug\", \"choijjs83q\");
-    script.setAttribute(\"data-color\", \"#FFDD00\");
-    script.setAttribute(\"data-emoji\", \"\");
-    script.setAttribute(\"data-font\", \"Lato\");
-    script.setAttribute(\"data-text\", \"Buy me a coffee\");
-    script.setAttribute(\"data-outline-color\", \"#000000\");
-    script.setAttribute(\"data-font-color\", \"#000000\");
-    script.setAttribute(\"data-coffee-color\", \"#ffffff\");
-    slot.dataset.bmcMounted = \"true\";
-    slot.appendChild(script);
-  }
-  if (document.readyState === \"loading\") {
-    document.addEventListener(\"DOMContentLoaded\", mountBmcButton, { once: true });
-  } else {
-    mountBmcButton();
-  }
-  const observer = new MutationObserver(() => mountBmcButton());
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-})();
-</script>
 """
 
-BMC_BUTTON_HTML = '<div id="bmc-button-slot" class="bmc-slot"></div>'
+BMC_BUTTON_HTML = """
+<div class="bmc-slot">
+  <a href="https://buymeacoffee.com/choijjs83q" target="_blank" rel="noopener noreferrer" aria-label="Buy me a coffee">
+    <img
+      class="bmc-image"
+      alt="Buy me a coffee"
+      src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='720' height='200' viewBox='0 0 720 200'%3E%3Crect width='720' height='200' rx='26' fill='%23FFDD00'/%3E%3Cg fill='none' stroke='%231b1534' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M80 58c16-9 52-9 68 0'/%3E%3Cpath d='M72 76c18-8 68-8 86 0'/%3E%3Cpath d='M86 86h58l-10 80c-1 8-8 14-16 14H100c-8 0-15-6-16-14L74 86h12z'/%3E%3C/g%3E%3Cpath d='M96 98h36l-7 63c-.8 6-5.8 10-11.8 10h-6.4c-6 0-11-4-11.8-10L88 98h8z' fill='%23ffffff'/%3E%3Ctext x='188' y='126' font-size='74' font-family='Cookie, Brush Script MT, cursive' fill='%231b1534'%3EBuy me a coffee%3C/text%3E%3C/svg%3E"
+    />
+  </a>
+</div>
+"""
 
 ADSENSE_ADS_TXT = "google.com, pub-5911950308781579, DIRECT, f08c47fec0942fa0\n"
+
+ADSENSE_HEAD_STATIC = """
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5911950308781579"
+     crossorigin="anonymous"></script>
+<meta name="google-adsense-account" content="ca-pub-5911950308781579">
+"""
 
 
 def _build_runtime_settings(
@@ -391,7 +384,6 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     with gr.Blocks() as demo:
         with gr.Row(elem_classes=["app-shell", "title-row"]):
             gr.Markdown("<h1 class='title-text'>OpenPDF2ZH</h1>")
-            gr.HTML(BMC_BUTTON_HTML)
         with gr.Row(equal_height=False):
             with gr.Column(scale=4):
                 input_pdf = gr.File(
@@ -472,6 +464,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         </div>
                         """
                     )
+                    gr.HTML(BMC_BUTTON_HTML)
 
             with gr.Column(scale=6):
                 translated_preview_path = gr.State(value=None)
@@ -862,7 +855,7 @@ def launch() -> None:
         allowed_paths=[str(settings.public_root)],
         theme=gr.themes.Soft(),
         css=CSS,
-        head=ADSENSE_HEAD,
+        head=ADSENSE_HEAD_STATIC,
         max_file_size="50mb",
     )
     uvicorn.run(app, host=settings.host, port=settings.port)
