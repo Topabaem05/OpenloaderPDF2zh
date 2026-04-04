@@ -6,10 +6,12 @@ import re
 from dataclasses import asdict
 from typing import Any, Iterable
 
-from openpdf2zh.config import AppSettings
+from openpdf2zh.config import AppSettings, OPENROUTER_PROVIDER, normalize_provider
 from openpdf2zh.models import JobWorkspace, PipelineRequest, TranslationUnit
 from openpdf2zh.providers.base import BaseTranslator
 from openpdf2zh.providers.ctranslate2 import CTranslate2Translator
+from openpdf2zh.providers.openrouter import OpenRouterTranslator
+from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
 
@@ -32,10 +34,11 @@ class TranslationService:
         request: PipelineRequest,
         workspace: JobWorkspace,
         progress: Any | None = None,
+        quota_guard: QuotaLease | None = None,
     ) -> list[TranslationUnit]:
         raw_data = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
         units = self._postprocess_units(self._extract_units(raw_data))
-        translator = self._build_translator(request.provider)
+        translator = self._build_translator(request)
         total_units = len(units)
         append_run_log(
             workspace.run_log,
@@ -71,6 +74,7 @@ class TranslationService:
             context_provider=heartbeat_context,
         ):
             for index, unit in enumerate(iterable, start=1):
+                self._check_quota(quota_guard)
                 current_state["index"] = index
                 current_state["page"] = unit.page_number
                 current_state["unit_id"] = unit.unit_id
@@ -96,12 +100,14 @@ class TranslationService:
                         f"translation=error page={unit.page_number} unit_id={unit.unit_id} detail={self._single_line_error(exc)}",
                     )
                     raise
+                self._check_quota(quota_guard)
                 if index == 1 or index == total_units or index % 10 == 0:
                     append_run_log(
                         workspace.run_log,
                         f"translation=progress current={index}/{total_units} page={unit.page_number} unit_id={unit.unit_id}",
                     )
 
+            self._check_quota(quota_guard)
             structured = self._build_structured_payload(workspace, request, units)
             append_run_log(workspace.run_log, "translation=writing_artifacts")
             write_json(workspace.structured_json, structured)
@@ -118,8 +124,13 @@ class TranslationService:
             append_run_log(workspace.run_log, "translation=artifacts:done")
         return units
 
-    def _build_translator(self, provider: str) -> BaseTranslator:
-        provider_key = provider.strip().lower()
+    def _check_quota(self, quota_guard: QuotaLease | None) -> None:
+        if quota_guard is None:
+            return
+        quota_guard.raise_if_expired()
+
+    def _build_translator(self, request: PipelineRequest) -> BaseTranslator:
+        provider_key = normalize_provider(request.provider)
         if provider_key == "ctranslate2":
             if not self.settings.ctranslate2_model_dir:
                 raise RuntimeError("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR is missing.")
@@ -127,7 +138,14 @@ class TranslationService:
                 self.settings.ctranslate2_model_dir,
                 self.settings.ctranslate2_tokenizer_path,
             )
-        raise ValueError(f"Unsupported provider: {provider}")
+        if provider_key == OPENROUTER_PROVIDER:
+            if not request.provider_api_key.strip():
+                raise RuntimeError("OpenRouter API key is required.")
+            return OpenRouterTranslator(
+                request.provider_api_key,
+                api_base_url=self.settings.openrouter_api_base_url,
+            )
+        raise ValueError(f"Unsupported provider: {request.provider}")
 
     def _extract_units(self, payload: Any) -> list[TranslationUnit]:
         units: list[TranslationUnit] = []
@@ -634,6 +652,7 @@ class TranslationService:
             "target_language": request.target_language,
             "provider": request.provider,
             "model": request.model,
+            "layout_engine": self.settings.render_layout_engine,
             "pages": [
                 {"page": page_number, "elements": elements}
                 for page_number, elements in sorted(

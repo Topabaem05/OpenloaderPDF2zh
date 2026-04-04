@@ -3,7 +3,7 @@
 Python-only skeleton for a PDF translation pipeline built on:
 
 - OpenDataLoader-PDF for parsing, layout analysis, and bounding boxes
-- CTranslate2 or Groq for translation
+- CTranslate2 or OpenRouter for translation
 - PyMuPDF for layout-aware PDF re-rendering
 - Gradio for a simple local desktop-like web UI
 
@@ -99,6 +99,10 @@ If `OPENPDF2ZH_CTRANSLATE2_MODEL_DIR` is not set, the app now defaults to the re
 - The app preserves detected source text sizes from the OpenDataLoader parsed JSON when re-rendering translated text.
 - You can preview the translated PDF directly in the Gradio UI after a run finishes.
 - Optional custom font rendering is supported through PyMuPDF HTML rendering with `@font-face` and an archive-backed font file path.
+- Layout engine options:
+  - `legacy` (default): keeps the existing redact-and-insert behavior.
+  - `pretext`: uses a headless browser helper to pre-measure translated text height, then shifts only later boxes in the same column cluster downward to reduce overlap.
+- In pretext mode, the renderer still redacts the original detected bbox and renders into the planned bbox.
 - Duplicate-detection cleanup for parsed boxes uses an NMS-like rule: near-identical boxes are removed by high IoU, and contained duplicates are removed only when IoM is high and the boxes are still similar in size.
 - Tune it with `OPENPDF2ZH_DUPLICATE_BOX_IOU_THRESHOLD` (default `0.85`) and `OPENPDF2ZH_DUPLICATE_BOX_IOM_THRESHOLD` (default `0.9`). Higher values keep more boxes; lower values remove duplicates more aggressively.
 - To force a specific TTF/TTC/OTF during rendering, set:
@@ -107,9 +111,26 @@ If `OPENPDF2ZH_CTRANSLATE2_MODEL_DIR` is not set, the app now defaults to the re
 OPENPDF2ZH_RENDER_FONT_PATH=/absolute/path/to/font.ttf
 ```
 
+Pretext helper requirements:
+
+```bash
+npm install --prefix tools/pretext_layout_helper
+npx --prefix tools/pretext_layout_helper playwright install chromium
+printf '%s' '{"requests":[{"request_id":"demo:1.000","text":"Hello world","font_family_css":"sans-serif","font_size_px":12,"line_height_px":14,"max_width_px":120}],"render_font_path":""}' \
+  | node tools/pretext_layout_helper/measure.mjs
+```
+
+If pretext mode is selected but the helper runtime is unavailable, the run fails with an explicit error and suggests switching back to `legacy`.
+
 ## Environment Variables
 
 See `.env.example`.
+
+Additional rendering controls:
+
+- `OPENPDF2ZH_RENDER_LAYOUT_ENGINE`: `legacy` or `pretext` (default: `legacy`)
+- `OPENPDF2ZH_PRETEXT_HELPER_PATH`: optional absolute path override for the browser helper script
+- `OPENPDF2ZH_PRETEXT_HELPER_TIMEOUT_SECONDS`: helper timeout in seconds (default: `20`)
 
 ### Server queue controls
 

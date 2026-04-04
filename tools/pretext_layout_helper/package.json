@@ -1,0 +1,12 @@
+{
+  "name": "pretext-layout-helper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "measure": "node measure.mjs"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "0.0.4",
+    "playwright": "1.59.1"
+  }
+}

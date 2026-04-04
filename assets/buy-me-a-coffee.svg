@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="200" viewBox="0 0 720 200" role="img" aria-labelledby="title desc">
+  <title id="title">Buy me a coffee</title>
+  <desc id="desc">Yellow rounded button with a coffee cup icon and Buy me a coffee text.</desc>
+  <rect width="720" height="200" rx="26" fill="#FFDD00"/>
+  <g fill="none" stroke="#1b1534" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M80 58c16-9 52-9 68 0"/>
+    <path d="M72 76c18-8 68-8 86 0"/>
+    <path d="M86 86h58l-10 80c-1 8-8 14-16 14H100c-8 0-15-6-16-14L74 86h12z"/>
+  </g>
+  <path d="M96 98h36l-7 63c-.8 6-5.8 10-11.8 10h-6.4c-6 0-11-4-11.8-10L88 98h8z" fill="#ffffff"/>
+  <text x="188" y="126" font-size="74" font-family="Cookie, Brush Script MT, cursive" fill="#1b1534">Buy me a coffee</text>
+</svg>

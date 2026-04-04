@@ -9,6 +9,7 @@ import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
+from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import (
     append_run_log,
@@ -24,7 +25,11 @@ class ParserService:
         self.settings = settings
 
     def parse(
-        self, _request: PipelineRequest, workspace: JobWorkspace
+        self,
+        _request: PipelineRequest,
+        workspace: JobWorkspace,
+        *,
+        quota_guard: QuotaLease | None = None,
     ) -> tuple[Path, Path]:
         append_run_log(
             workspace.run_log,
@@ -32,6 +37,7 @@ class ParserService:
         )
 
         with run_log_heartbeat(workspace.run_log, "parse"):
+            self._check_quota(quota_guard)
             try:
                 import opendataloader_pdf
             except ModuleNotFoundError as exc:
@@ -44,6 +50,7 @@ class ParserService:
                 workspace.run_log,
                 "parser=convert",
             )
+            self._check_quota(quota_guard)
             try:
                 opendataloader_pdf.convert(
                     input_path=str(workspace.input_pdf),
@@ -55,6 +62,7 @@ class ParserService:
                 raise RuntimeError(f"OpenDataLoader parsing failed: {exc}") from exc
 
             append_run_log(workspace.run_log, "parser=convert:done")
+            self._check_quota(quota_guard)
 
             copy_first_matching(workspace.parsed_dir, workspace.raw_json, [".json"])
             copy_first_matching(
@@ -74,25 +82,32 @@ class ParserService:
                 append_run_log(workspace.run_log, f"warning={warning_message}")
         return workspace.raw_json, workspace.raw_markdown
 
+    def _check_quota(self, quota_guard: QuotaLease | None) -> None:
+        if quota_guard is None:
+            return
+        quota_guard.raise_if_expired()
+
     def _build_detected_boxes_preview(self, workspace: JobWorkspace) -> Path:
         payload = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
         document = fitz.open(str(workspace.input_pdf))
+        try:
+            for entry in self._iter_detected_boxes(payload):
+                page_index = entry["page_number"] - 1
+                if page_index < 0 or page_index >= len(document):
+                    continue
+                page = document[page_index]
+                rect = self._pdf_bbox_to_rect(page, entry["bbox"])
+                color = self._box_color(entry["label"])
+                page.draw_rect(rect, color=color, width=1.1, overlay=True)
 
-        for entry in self._iter_detected_boxes(payload):
-            page_index = entry["page_number"] - 1
-            if page_index < 0 or page_index >= len(document):
-                continue
-            page = document[page_index]
-            rect = self._pdf_bbox_to_rect(page, entry["bbox"])
-            color = self._box_color(entry["label"])
-            page.draw_rect(rect, color=color, width=1.1, overlay=True)
-
-        document.save(
-            str(workspace.detected_boxes_pdf),
-            garbage=4,
-            deflate=True,
-            clean=True,
-        )
+            document.save(
+                str(workspace.detected_boxes_pdf),
+                garbage=4,
+                deflate=True,
+                clean=True,
+            )
+        finally:
+            document.close()
         shutil.copy2(workspace.detected_boxes_pdf, workspace.public_detected_boxes_pdf)
         append_run_log(
             workspace.run_log,

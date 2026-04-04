@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import ipaddress
 from pathlib import Path
 from urllib.parse import quote
 
@@ -10,14 +11,21 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 
-from openpdf2zh.config import AppSettings
+from openpdf2zh.config import (
+    AppSettings,
+    OPENROUTER_FIXED_MODEL,
+    OPENROUTER_PROVIDER,
+    normalize_provider,
+)
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.pipeline import PipelineRunner
+from openpdf2zh.services.usage_quota import QuotaExceededError, UsageQuotaService
 from openpdf2zh.utils.files import start_workspace_cleanup_worker
 from openpdf2zh.utils.job_limiter import JobLimiter, QueueBusyError
 
+BMC_IMAGE_PATH = Path(__file__).resolve().parents[2] / "assets" / "buy-me-a-coffee.svg"
+
 CSS = """
-.gradio-container {zoom: 0.8;}
 .app-shell {max-width: 1200px; margin: 0 auto 12px 0; text-align: left;}
 .title-row {
   align-items: center;
@@ -37,8 +45,7 @@ CSS = """
 }
 .bmc-image {
   display: block;
-  width: 260px;
-  max-width: 30vw;
+  width: 240px;
   height: auto;
 }
 .hint {color: #4b5563; font-size: 0.95rem;}
@@ -68,8 +75,7 @@ CSS = """
 }
 .pdf-preview-viewport {
   width: 100%;
-  aspect-ratio: 1 / 1.414;
-  max-height: 960px;
+  height: clamp(640px, 70vh, 960px);
   overflow: hidden;
   display: flex;
   justify-content: center;
@@ -83,8 +89,7 @@ CSS = """
   object-fit: contain;
 }
 .pdf-preview-empty {
-  aspect-ratio: 1 / 1.414;
-  min-height: 0;
+  min-height: clamp(640px, 70vh, 960px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -142,6 +147,10 @@ TARGET_LANGUAGE_CHOICES = [
 ]
 
 CTRANSLATE2_TARGET_LANGUAGE_CHOICES = ["English", "Korean"]
+LAYOUT_ENGINE_CHOICES = [
+    ("Legacy", "legacy"),
+    ("Pretext (non-overlapping)", "pretext"),
+]
 
 MAX_INPUT_PDF_BYTES = 50 * 1024 * 1024
 
@@ -159,17 +168,17 @@ ADSENSE_HEAD = """
 <meta name=\"google-adsense-account\" content=\"ca-pub-5911950308781579\">
 """
 
-BMC_BUTTON_HTML = """
-<div class="bmc-slot">
-  <a href="https://buymeacoffee.com/choijjs83q" target="_blank" rel="noopener noreferrer" aria-label="Buy me a coffee">
-    <img
-      class="bmc-image"
-      alt="Buy me a coffee"
-      src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='720' height='200' viewBox='0 0 720 200'%3E%3Crect width='720' height='200' rx='26' fill='%23FFDD00'/%3E%3Cg fill='none' stroke='%231b1534' stroke-width='9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M80 58c16-9 52-9 68 0'/%3E%3Cpath d='M72 76c18-8 68-8 86 0'/%3E%3Cpath d='M86 86h58l-10 80c-1 8-8 14-16 14H100c-8 0-15-6-16-14L74 86h12z'/%3E%3C/g%3E%3Cpath d='M96 98h36l-7 63c-.8 6-5.8 10-11.8 10h-6.4c-6 0-11-4-11.8-10L88 98h8z' fill='%23ffffff'/%3E%3Ctext x='188' y='126' font-size='74' font-family='Cookie, Brush Script MT, cursive' fill='%231b1534'%3EBuy me a coffee%3C/text%3E%3C/svg%3E"
-    />
-  </a>
-</div>
-"""
+
+def _build_bmc_button_html() -> str:
+    return (
+        '<div class="bmc-slot">'
+        '<a href="https://buymeacoffee.com/choijjs83q" target="_blank" '
+        'rel="noopener noreferrer" aria-label="Buy me a coffee">'
+        f'<img class="bmc-image" alt="Buy me a coffee" src="/gradio_api/file={quote(str(BMC_IMAGE_PATH))}" />'
+        "</a>"
+        "</div>"
+    )
+
 
 ADSENSE_ADS_TXT = "google.com, pub-5911950308781579, DIRECT, f08c47fec0942fa0\n"
 
@@ -180,6 +189,28 @@ ADSENSE_HEAD_STATIC = """
 """
 
 
+def _provider_key(provider: object) -> str:
+    if not isinstance(provider, str):
+        return ""
+    return normalize_provider(provider)
+
+
+def _uses_openrouter(provider: object) -> bool:
+    return _provider_key(provider) == OPENROUTER_PROVIDER
+
+
+def _model_for_provider(selected_provider: str, settings: AppSettings) -> str:
+    if _uses_openrouter(selected_provider):
+        return OPENROUTER_FIXED_MODEL
+    if _provider_key(selected_provider) == "ctranslate2":
+        return "auto"
+    return settings.default_model
+
+
+def _openrouter_control_update(selected_provider: object) -> dict:
+    return gr.update(visible=_uses_openrouter(selected_provider))
+
+
 def _build_runtime_settings(
     settings: AppSettings,
     provider: str,
@@ -187,17 +218,19 @@ def _build_runtime_settings(
     ctranslate2_tokenizer_path: str,
     render_font_file: str | None,
     adjust_render_letter_spacing_for_overlap: bool,
+    render_layout_engine: str,
 ) -> AppSettings:
+    provider_key = _provider_key(provider)
     return replace(
         settings,
         ctranslate2_model_dir=(
             ctranslate2_model_dir.strip()
-            if provider == "ctranslate2"
+            if provider_key == "ctranslate2"
             else settings.ctranslate2_model_dir
         ),
         ctranslate2_tokenizer_path=(
             ctranslate2_tokenizer_path.strip()
-            if provider == "ctranslate2"
+            if provider_key == "ctranslate2"
             else settings.ctranslate2_tokenizer_path
         ),
         render_font_path=(
@@ -206,6 +239,11 @@ def _build_runtime_settings(
         adjust_render_letter_spacing_for_overlap=(
             adjust_render_letter_spacing_for_overlap
         ),
+        render_layout_engine=(
+            render_layout_engine
+            if render_layout_engine in {"legacy", "pretext"}
+            else settings.render_layout_engine
+        ),
     )
 
 
@@ -213,7 +251,7 @@ def _normalize_target_language_for_provider(
     provider: str,
     target_language: str,
 ) -> str:
-    if provider == "ctranslate2":
+    if _provider_key(provider) == "ctranslate2":
         if target_language in CTRANSLATE2_TARGET_LANGUAGE_CHOICES:
             return target_language
         return "English"
@@ -225,7 +263,7 @@ def _target_language_update_for_provider(
     target_language: str,
 ):
     normalized = _normalize_target_language_for_provider(provider, target_language)
-    if provider == "ctranslate2":
+    if _provider_key(provider) == "ctranslate2":
         return gr.update(
             choices=CTRANSLATE2_TARGET_LANGUAGE_CHOICES,
             value=normalized,
@@ -352,11 +390,53 @@ def _run_pipeline_or_raise_gradio(
     runner: PipelineRunner,
     request: PipelineRequest,
     progress: gr.Progress | None = None,
+    quota_guard=None,
 ):
     try:
-        return runner.run(request, progress=progress)
+        return runner.run(request, progress=progress, quota_guard=quota_guard)
     except RuntimeError as exc:
         raise gr.Error(str(exc)) from exc
+
+
+def _is_public_ip(candidate: str) -> bool:
+    try:
+        return ipaddress.ip_address(candidate).is_global
+    except ValueError:
+        return False
+
+
+def _extract_request_headers(request: gr.Request | None) -> dict[str, str]:
+    if request is None:
+        return {}
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        headers = getattr(getattr(request, "request", None), "headers", None)
+    if headers is None:
+        return {}
+    return {str(key).lower(): str(value) for key, value in headers.items()}
+
+
+def _extract_request_client_host(request: gr.Request | None) -> str:
+    if request is None:
+        return ""
+    client = getattr(request, "client", None)
+    if client is None:
+        client = getattr(getattr(request, "request", None), "client", None)
+    return str(getattr(client, "host", "") or "").strip()
+
+
+def _resolve_client_ip(request: gr.Request | None, settings: AppSettings) -> str:
+    headers = _extract_request_headers(request)
+    if settings.trust_forwarded_for:
+        forwarded = headers.get("x-forwarded-for", "")
+        for candidate in forwarded.split(","):
+            normalized = candidate.strip()
+            if normalized and _is_public_ip(normalized):
+                return normalized
+    real_ip = headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    return _extract_request_client_host(request)
 
 
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
@@ -365,21 +445,28 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
         max_concurrency=settings.job_queue_concurrency,
         max_waiting=settings.job_queue_max_size,
     )
+    quota_service = (
+        UsageQuotaService(
+            settings.rate_limit_storage_path,
+            daily_limit_seconds=settings.rate_limit_daily_seconds,
+            timezone_name=settings.rate_limit_timezone,
+        )
+        if settings.rate_limit_enabled
+        else None
+    )
     job_submission_limit = (
         settings.job_queue_concurrency + settings.job_queue_max_size + 2
     )
-    provider_choices = [("CTranslate2", "ctranslate2")]
+    provider_choices = [
+        ("CTranslate2", "ctranslate2"),
+        ("OpenRouter", OPENROUTER_PROVIDER),
+    ]
     provider_values = [value for _, value in provider_choices]
     default_provider = (
         settings.default_provider
         if settings.default_provider in provider_values
         else "ctranslate2"
     )
-
-    def default_model_for_provider(selected_provider: str) -> str:
-        if selected_provider == "ctranslate2":
-            return "auto"
-        return settings.default_model
 
     with gr.Blocks() as demo:
         with gr.Row(elem_classes=["app-shell", "title-row"]):
@@ -398,6 +485,19 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         choices=provider_choices,
                         value=default_provider,
                     )
+                    with gr.Column(
+                        visible=_uses_openrouter(default_provider)
+                    ) as openrouter_controls:
+                        openrouter_api_key = gr.Textbox(
+                            label="OpenRouter API key",
+                            placeholder="sk-or-v1-...",
+                            type="password",
+                        )
+                        openrouter_model = gr.Textbox(
+                            label="OpenRouter model",
+                            value=OPENROUTER_FIXED_MODEL,
+                            interactive=False,
+                        )
                 with gr.Column(elem_classes=["control-panel"]):
                     with gr.Row():
                         source_language = gr.Dropdown(
@@ -436,6 +536,16 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         value=settings.adjust_render_letter_spacing_for_overlap,
                         info="When nearby translated boxes overlap or nearly collide, compress letter spacing before shrinking the text.",
                     )
+                    render_layout_engine = gr.Radio(
+                        label="Layout engine",
+                        choices=LAYOUT_ENGINE_CHOICES,
+                        value=(
+                            settings.render_layout_engine
+                            if settings.render_layout_engine in {"legacy", "pretext"}
+                            else "legacy"
+                        ),
+                        info="Legacy keeps current placement behavior. Pretext uses headless browser text measurement and shifts only later boxes in the same column cluster.",
+                    )
                     gr.Markdown(
                         """
                         <div class="hint">
@@ -464,7 +574,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         </div>
                         """
                     )
-                    gr.HTML(BMC_BUTTON_HTML)
+                    gr.HTML(_build_bmc_button_html())
 
             with gr.Column(scale=6):
                 translated_preview_path = gr.State(value=None)
@@ -541,9 +651,12 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             source_language: str,
             target_language: str,
             provider: str,
+            openrouter_api_key: str,
             page_mode: str,
             render_font_file: str | None,
             adjust_render_letter_spacing_for_overlap: bool,
+            render_layout_engine: str,
+            http_request: gr.Request,
             progress: gr.Progress = gr.Progress(track_tqdm=False),
         ) -> tuple[list[str], str, str, int, str, str, str, int, str, str]:
             if not input_pdf:
@@ -556,7 +669,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 provider,
                 target_language,
             )
+            if _uses_openrouter(provider) and not openrouter_api_key.strip():
+                raise gr.Error("OpenRouter API key를 입력해주세요.")
 
+            client_ip = _resolve_client_ip(http_request, settings)
             try:
                 with job_limiter.acquire():
                     runner_settings = _build_runtime_settings(
@@ -566,6 +682,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         settings.ctranslate2_tokenizer_path,
                         render_font_file,
                         adjust_render_letter_spacing_for_overlap,
+                        render_layout_engine,
                     )
                     runner = PipelineRunner(runner_settings)
 
@@ -573,16 +690,33 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         input_pdf=Path(input_pdf),
                         target_language=target_language,
                         provider=provider,
-                        model=default_model_for_provider(provider),
+                        model=_model_for_provider(provider, settings),
+                        provider_api_key=(
+                            openrouter_api_key.strip()
+                            if _uses_openrouter(provider)
+                            else ""
+                        ),
+                        client_ip=client_ip,
                         page_limit=_resolve_page_limit(page_mode),
                         font_size=settings.base_font_size,
                     )
-                    result = _run_pipeline_or_raise_gradio(
-                        runner,
-                        request,
-                        progress=progress,
-                    )
+                    if quota_service is None:
+                        result = _run_pipeline_or_raise_gradio(
+                            runner,
+                            request,
+                            progress=progress,
+                        )
+                    else:
+                        with quota_service.acquire(client_ip) as quota_guard:
+                            result = _run_pipeline_or_raise_gradio(
+                                runner,
+                                request,
+                                progress=progress,
+                                quota_guard=quota_guard,
+                            )
             except QueueBusyError as exc:
+                raise gr.Error(str(exc)) from exc
+            except QuotaExceededError as exc:
                 raise gr.Error(str(exc)) from exc
 
             translated_preview = _resolve_preview_state(
@@ -611,9 +745,12 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             )
 
         def sync_provider_state(selected_provider: str, current_target_language: str):
-            return _target_language_update_for_provider(
+            target_language_update = _target_language_update_for_provider(
                 selected_provider,
                 current_target_language,
+            )
+            return target_language_update, _openrouter_control_update(
+                selected_provider
             )
 
         def reset_form() -> tuple[
@@ -622,8 +759,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
             str,
             str,
             str,
+            str,
+            str,
             None,
             bool,
+            str,
             None,
             str,
             None,
@@ -640,9 +780,16 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 "English",
                 settings.default_target_language,
                 default_provider,
+                "",
+                gr.update(visible=_uses_openrouter(default_provider)),
                 "first",
                 None,
                 settings.adjust_render_letter_spacing_for_overlap,
+                (
+                    settings.render_layout_engine
+                    if settings.render_layout_engine in {"legacy", "pretext"}
+                    else "legacy"
+                ),
                 None,
                 "",
                 None,
@@ -716,7 +863,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
         provider.change(
             fn=sync_provider_state,
             inputs=[provider, target_language],
-            outputs=[target_language],
+            outputs=[target_language, openrouter_controls],
             concurrency_limit=1,
         )
 
@@ -727,9 +874,11 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 source_language,
                 target_language,
                 provider,
+                openrouter_api_key,
                 page_mode,
                 render_font_file,
                 adjust_render_letter_spacing_for_overlap,
+                render_layout_engine,
             ],
             outputs=[
                 generated_files,
@@ -792,9 +941,12 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                 source_language,
                 target_language,
                 provider,
+                openrouter_api_key,
+                openrouter_controls,
                 page_mode,
                 render_font_file,
                 adjust_render_letter_spacing_for_overlap,
+                render_layout_engine,
                 generated_files,
                 workspace_path,
                 translated_preview_path,
@@ -852,7 +1004,7 @@ def launch() -> None:
         path="/",
         server_name=settings.host,
         server_port=settings.port,
-        allowed_paths=[str(settings.public_root)],
+        allowed_paths=[str(settings.public_root), str(BMC_IMAGE_PATH)],
         theme=gr.themes.Soft(),
         css=CSS,
         head=ADSENSE_HEAD_STATIC,

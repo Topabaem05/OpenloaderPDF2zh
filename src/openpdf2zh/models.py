@@ -10,6 +10,8 @@ class PipelineRequest:
     target_language: str
     provider: str
     model: str
+    provider_api_key: str = ""
+    client_ip: str = ""
     page_limit: int | None = None
     font_size: float = 10.0
 

@@ -4,6 +4,7 @@ import html
 import json
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,41 @@ import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
+from openpdf2zh.services.layout_planner import (
+    FitValidationResult,
+    LayoutBlock,
+    LayoutPlanner,
+)
+from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
+
+
+@dataclass(slots=True)
+class RenderBlockPlan:
+    block_id: str
+    original_rect: fitz.Rect
+    planned_rect: fitz.Rect
+    actual_render_bbox: fitz.Rect | None
+    translated: str
+    label: str
+    font_size: float
+    font_name: str
+    estimated_line_count: int
+    planned_line_count: int
+    line_height_pt: float | None
+    letter_spacing_em: float | None
+    toc_page_number: str
+    shift_pt: float
+    planned_height_pt: float
+    top_delta_pt: float
+    bottom_delta_pt: float
+    final_scale_used: float
+    layout_engine: str
+    fallback_reason: str | None
+    fallback_detail: str | None
+    planner_candidate_reason: str
+    post_render_overlap_pt: float
+    render_allowed: bool
 
 
 class RenderService:
@@ -22,179 +57,708 @@ class RenderService:
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
+        self.layout_planner = LayoutPlanner(settings)
 
     def render(
         self,
         request: PipelineRequest,
         workspace: JobWorkspace,
         progress: Any | None = None,
+        quota_guard: QuotaLease | None = None,
     ) -> int:
         payload = json.loads(workspace.structured_json.read_text(encoding="utf-8"))
         doc = fitz.open(str(workspace.input_pdf))
-        overflow: list[dict[str, object]] = []
-        page_bundles = payload.get("pages", [])
-        total_pages = len(page_bundles)
-        render_css, render_archive, render_font_family = self._build_render_resources()
-        append_run_log(workspace.run_log, f"render=pages total={total_pages}")
-        current_state = {
-            "page": 0,
-            "total": total_pages,
-            "planned": 0,
-            "overflow": 0,
+        try:
+            overflow: list[dict[str, object]] = []
+            layout_plan: list[dict[str, object]] = []
+            layout_engine = self._resolve_layout_engine()
+            page_bundles = payload.get("pages", [])
+            total_pages = len(page_bundles)
+            render_css, render_archive, render_font_family = self._build_render_resources()
+            append_run_log(
+                workspace.run_log,
+                f"render=pages total={total_pages} layout_engine={layout_engine}",
+            )
+            current_state = {
+                "page": 0,
+                "total": total_pages,
+                "planned": 0,
+                "overflow": 0,
+            }
+
+            def heartbeat_context() -> str:
+                return (
+                    f"current={current_state['page']}/{current_state['total']} "
+                    f"planned={current_state['planned']} overflow={current_state['overflow']}"
+                )
+
+            with run_log_heartbeat(
+                workspace.run_log,
+                "render",
+                context_provider=heartbeat_context,
+            ):
+                for page_index_1based, page_bundle in enumerate(page_bundles, start=1):
+                    self._check_quota(quota_guard)
+                    current_state["page"] = page_index_1based
+                    if progress is not None:
+                        progress(
+                            0.85 + (0.13 * page_index_1based / max(total_pages, 1)),
+                            desc=f"Rendering page {page_index_1based}/{total_pages}",
+                        )
+                    page_index = int(page_bundle["page"]) - 1
+                    if page_index < 0 or page_index >= len(doc):
+                        continue
+                    page = doc[page_index]
+                    elements = sorted(
+                        page_bundle.get("elements", []),
+                        key=lambda element: self._element_sort_key(element),
+                    )
+                    planned_elements: list[dict[str, object]] = []
+                    planned: list[
+                        tuple[
+                            fitz.Rect,
+                            str,
+                            str,
+                            float,
+                            str,
+                            int,
+                            float | None,
+                            float | None,
+                            str,
+                        ]
+                    ] = []
+                    for element in elements:
+                        translated = str(element.get("translated", "")).strip()
+                        bbox = element.get("bbox") or []
+                        label = str(element.get("label", "text"))
+                        if not translated or len(bbox) != 4:
+                            continue
+                        rect = self._pdf_bbox_to_rect(page, bbox)
+                        font_size = self._resolve_font_size(element, request.font_size)
+                        font_name = str(element.get("font_name", "")).strip()
+                        estimated_line_count = self._resolve_estimated_line_count(element)
+                        line_height_pt = self._resolve_line_height_pt(element, font_size)
+                        letter_spacing_em = self._resolve_letter_spacing_em(element)
+                        toc_page_number = str(element.get("toc_page_number", "")).strip()
+                        planned_elements.append(element)
+                        planned.append(
+                            (
+                                rect,
+                                translated,
+                                label,
+                                font_size,
+                                font_name,
+                                estimated_line_count,
+                                line_height_pt,
+                                letter_spacing_em,
+                                toc_page_number,
+                            )
+                        )
+
+                    planned = self._apply_overlap_aware_letter_spacing(planned)
+                    planned_blocks = self._plan_render_blocks(
+                        planned,
+                        layout_engine,
+                        render_font_family,
+                        render_css,
+                        render_archive,
+                    )
+                    element_by_block_id = {
+                        f"b{index:04d}": element
+                        for index, element in enumerate(planned_elements, start=1)
+                    }
+                    for block in planned_blocks:
+                        element = element_by_block_id.get(block.block_id)
+                        if element is not None:
+                            self._update_element_layout_metadata(element, block)
+
+                    current_state["planned"] = len(planned_blocks)
+                    renderable_blocks = [block for block in planned_blocks if block.render_allowed]
+                    for block in renderable_blocks:
+                        page.add_redact_annot(block.original_rect, fill=(1, 1, 1))
+                    if renderable_blocks:
+                        page.apply_redactions()
+
+                    for block in planned_blocks:
+                        self._check_quota(quota_guard)
+                        if (
+                            block.layout_engine == "pretext"
+                            and block.actual_render_bbox is not None
+                        ):
+                            append_run_log(
+                                workspace.run_log,
+                                "render=probe_summary "
+                                f"page={page_index + 1} block_id={block.block_id} "
+                                f"pretext_height_pt={round(block.planned_height_pt, 3)} "
+                                f"probe_bbox={self._rect_to_bbox(block.actual_render_bbox)}",
+                            )
+
+                        if not block.render_allowed:
+                            layout_plan.append(
+                                self._build_layout_plan_entry(
+                                    page_index + 1,
+                                    block,
+                                )
+                            )
+                            overflow.append(
+                                self._build_overflow_entry(
+                                    page_index + 1,
+                                    block,
+                                    scale=0.0,
+                                )
+                            )
+                            continue
+
+                        if block.toc_page_number:
+                            spare_height, scale = self._render_toc_entry(
+                                page,
+                                block.planned_rect,
+                                block.translated,
+                                block.toc_page_number,
+                                block.font_size,
+                                render_font_family,
+                                block.font_name,
+                                render_css,
+                                render_archive,
+                                block.line_height_pt,
+                            )
+                        else:
+                            html_block = self._build_html(
+                                block.translated,
+                                block.label,
+                                block.font_size,
+                                render_font_family,
+                                block.font_name,
+                                block.planned_line_count,
+                                block.line_height_pt,
+                                block.letter_spacing_em,
+                            )
+                            spare_height, scale = self._insert_with_scale_policy(
+                                page,
+                                block.planned_rect,
+                                html_block,
+                                render_css,
+                                render_archive,
+                                block.font_size,
+                                scale_candidates=(
+                                    [1.0]
+                                    if layout_engine == "pretext"
+                                    else None
+                                ),
+                            )
+                        if block.layout_engine == "pretext":
+                            block.final_scale_used = scale
+                            append_run_log(
+                                workspace.run_log,
+                                "render=final_summary "
+                                f"page={page_index + 1} block_id={block.block_id} "
+                                f"final_bbox={self._rect_to_bbox(block.actual_render_bbox or block.planned_rect)} "
+                                f"probe_final_delta={[0.0, 0.0, 0.0, 0.0] if block.actual_render_bbox is not None else None}",
+                            )
+                        if spare_height == -1:
+                            if block.layout_engine == "pretext":
+                                block.fallback_reason = "final_render_drift_rejected"
+                                block.fallback_detail = (
+                                    "PyMuPDF final render rejected the pre-approved scale_low=1.0 candidate."
+                                )
+                            overflow.append(
+                                self._build_overflow_entry(
+                                    page_index + 1,
+                                    block,
+                                    scale=scale,
+                                )
+                            )
+                        layout_plan.append(
+                            self._build_layout_plan_entry(
+                                page_index + 1,
+                                block,
+                            )
+                        )
+                    current_state["overflow"] = len(overflow)
+                    if (
+                        page_index_1based == 1
+                        or page_index_1based == total_pages
+                        or page_index_1based % 5 == 0
+                    ):
+                        append_run_log(
+                            workspace.run_log,
+                            f"render=progress current={page_index_1based}/{total_pages} planned={len(planned)} overflow={len(overflow)}",
+                        )
+
+            doc.save(
+                str(workspace.translated_pdf),
+                garbage=4,
+                deflate=True,
+                clean=True,
+            )
+            write_json(workspace.structured_json, payload)
+            shutil.copy2(workspace.translated_pdf, workspace.public_translated_pdf)
+            write_json(
+                workspace.render_report_json,
+                {
+                    "layout_engine": layout_engine,
+                    "overflow": overflow,
+                    "layout_plan": layout_plan,
+                },
+            )
+            append_run_log(workspace.run_log, "render=artifacts:done")
+            return len(overflow)
+        finally:
+            doc.close()
+
+    def _check_quota(self, quota_guard: QuotaLease | None) -> None:
+        if quota_guard is None:
+            return
+        quota_guard.raise_if_expired()
+
+    def _resolve_layout_engine(self) -> str:
+        configured = self.settings.render_layout_engine.strip().lower()
+        if configured in {"legacy", "pretext"}:
+            return configured
+        return "legacy"
+
+    def _rect_to_bbox(self, rect: fitz.Rect) -> list[float]:
+        return [
+            round(rect.x0, 3),
+            round(rect.y0, 3),
+            round(rect.x1, 3),
+            round(rect.y1, 3),
+        ]
+
+    def _build_layout_plan_entry(
+        self,
+        page_number: int,
+        block: RenderBlockPlan,
+    ) -> dict[str, object]:
+        return {
+            "page": page_number,
+            "block_id": block.block_id,
+            "label": block.label,
+            "layout_engine": block.layout_engine,
+            "original_bbox": self._rect_to_bbox(block.original_rect),
+            "planned_bbox": self._rect_to_bbox(block.planned_rect),
+            "actual_render_bbox": (
+                self._rect_to_bbox(block.actual_render_bbox)
+                if block.actual_render_bbox is not None
+                else None
+            ),
+            "estimated_line_count": block.estimated_line_count,
+            "planned_line_count": block.planned_line_count,
+            "planned_height_pt": round(block.planned_height_pt, 3),
+            "shift_pt": round(block.shift_pt, 3),
+            "vertical_shift_pt": round(block.shift_pt, 3),
+            "planned_font_size": round(block.font_size, 3),
+            "planned_line_height_pt": (
+                round(block.line_height_pt, 3)
+                if block.line_height_pt is not None
+                else None
+            ),
+            "planned_letter_spacing_em": block.letter_spacing_em,
+            "top_delta_pt": round(block.top_delta_pt, 3),
+            "bottom_delta_pt": round(block.bottom_delta_pt, 3),
+            "final_scale_used": round(block.final_scale_used, 3),
+            "planner_candidate_reason": block.planner_candidate_reason,
+            "post_render_overlap_pt": round(block.post_render_overlap_pt, 3),
+            "fallback_reason": block.fallback_reason,
+            "fallback_detail": block.fallback_detail,
         }
 
-        def heartbeat_context() -> str:
-            return (
-                f"current={current_state['page']}/{current_state['total']} "
-                f"planned={current_state['planned']} overflow={current_state['overflow']}"
+    def _build_overflow_entry(
+        self,
+        page_number: int,
+        block: RenderBlockPlan,
+        *,
+        scale: float,
+    ) -> dict[str, object]:
+        return {
+            "page": page_number,
+            "label": block.label,
+            "bbox": self._rect_to_bbox(block.original_rect),
+            "original_bbox": self._rect_to_bbox(block.original_rect),
+            "planned_bbox": self._rect_to_bbox(block.planned_rect),
+            "actual_render_bbox": (
+                self._rect_to_bbox(block.actual_render_bbox)
+                if block.actual_render_bbox is not None
+                else None
+            ),
+            "font_size": block.font_size,
+            "line_height_pt": block.line_height_pt,
+            "estimated_line_count": block.estimated_line_count,
+            "planned_line_count": block.planned_line_count,
+            "planned_height_pt": round(block.planned_height_pt, 3),
+            "shift_pt": round(block.shift_pt, 3),
+            "vertical_shift_pt": round(block.shift_pt, 3),
+            "planned_font_size": round(block.font_size, 3),
+            "planned_line_height_pt": (
+                round(block.line_height_pt, 3)
+                if block.line_height_pt is not None
+                else None
+            ),
+            "planned_letter_spacing_em": block.letter_spacing_em,
+            "top_delta_pt": round(block.top_delta_pt, 3),
+            "bottom_delta_pt": round(block.bottom_delta_pt, 3),
+            "final_scale_used": round(block.final_scale_used, 3),
+            "planner_candidate_reason": block.planner_candidate_reason,
+            "post_render_overlap_pt": round(block.post_render_overlap_pt, 3),
+            "layout_engine": block.layout_engine,
+            "fallback_reason": block.fallback_reason,
+            "fallback_detail": block.fallback_detail,
+            "scale": scale,
+            "text_preview": block.translated[:160],
+        }
+
+    def _update_element_layout_metadata(
+        self,
+        element: dict[str, object],
+        block: RenderBlockPlan,
+    ) -> None:
+        element["planned_bbox"] = self._rect_to_bbox(block.planned_rect)
+        element["actual_render_bbox"] = (
+            self._rect_to_bbox(block.actual_render_bbox)
+            if block.actual_render_bbox is not None
+            else None
+        )
+        element["pretext_line_count"] = block.planned_line_count
+        element["pretext_height_pt"] = round(block.planned_height_pt, 3)
+        element["vertical_shift_pt"] = round(block.shift_pt, 3)
+        element["top_delta_pt"] = round(block.top_delta_pt, 3)
+        element["bottom_delta_pt"] = round(block.bottom_delta_pt, 3)
+        element["final_scale_used"] = round(block.final_scale_used, 3)
+        element["layout_engine"] = block.layout_engine
+        element["layout_fallback"] = block.fallback_reason
+        element["planner_candidate_reason"] = block.planner_candidate_reason
+        element["post_render_overlap_pt"] = round(block.post_render_overlap_pt, 3)
+        element["planned_font_size"] = round(block.font_size, 3)
+        element["planned_line_height_pt"] = (
+            round(block.line_height_pt, 3)
+            if block.line_height_pt is not None
+            else None
+        )
+        element["planned_letter_spacing_em"] = block.letter_spacing_em
+
+    def _plan_render_blocks(
+        self,
+        planned: list[
+            tuple[
+                fitz.Rect,
+                str,
+                str,
+                float,
+                str,
+                int,
+                float | None,
+                float | None,
+                str,
+            ]
+        ],
+        layout_engine: str,
+        render_font_family: str | None,
+        render_css: str | None,
+        render_archive: fitz.Archive | None,
+    ) -> list[RenderBlockPlan]:
+        blocks: list[RenderBlockPlan] = []
+        for index, item in enumerate(planned, start=1):
+            (
+                rect,
+                translated,
+                label,
+                font_size,
+                font_name,
+                estimated_line_count,
+                line_height_pt,
+                letter_spacing_em,
+                toc_page_number,
+            ) = item
+            blocks.append(
+                RenderBlockPlan(
+                    block_id=f"b{index:04d}",
+                    original_rect=fitz.Rect(rect),
+                    planned_rect=fitz.Rect(rect),
+                    actual_render_bbox=None,
+                    translated=translated,
+                    label=label,
+                    font_size=font_size,
+                    font_name=font_name,
+                    estimated_line_count=estimated_line_count,
+                    planned_line_count=estimated_line_count,
+                    line_height_pt=line_height_pt,
+                    letter_spacing_em=letter_spacing_em,
+                    toc_page_number=toc_page_number,
+                    shift_pt=0.0,
+                    planned_height_pt=rect.height,
+                    top_delta_pt=0.0,
+                    bottom_delta_pt=0.0,
+                    final_scale_used=1.0,
+                    layout_engine=layout_engine,
+                    fallback_reason=None,
+                    fallback_detail=None,
+                    planner_candidate_reason="none",
+                    post_render_overlap_pt=0.0,
+                    render_allowed=True,
+                )
             )
 
-        with run_log_heartbeat(
-            workspace.run_log,
-            "render",
-            context_provider=heartbeat_context,
-        ):
-            for page_index_1based, page_bundle in enumerate(page_bundles, start=1):
-                current_state["page"] = page_index_1based
-                if progress is not None:
-                    progress(
-                        0.85 + (0.13 * page_index_1based / max(total_pages, 1)),
-                        desc=f"Rendering page {page_index_1based}/{total_pages}",
-                    )
-                page_index = int(page_bundle["page"]) - 1
-                if page_index < 0 or page_index >= len(doc):
-                    continue
-                page = doc[page_index]
-                elements = sorted(
-                    page_bundle.get("elements", []),
-                    key=lambda element: self._element_sort_key(element),
-                )
-                planned: list[
-                    tuple[
-                        fitz.Rect,
-                        str,
-                        str,
-                        float,
-                        str,
-                        int,
-                        float | None,
-                        float | None,
-                        str,
-                    ]
-                ] = []
-                for element in elements:
-                    translated = str(element.get("translated", "")).strip()
-                    bbox = element.get("bbox") or []
-                    label = str(element.get("label", "text"))
-                    if not translated or len(bbox) != 4:
-                        continue
-                    rect = self._pdf_bbox_to_rect(page, bbox)
-                    font_size = self._resolve_font_size(element, request.font_size)
-                    font_name = str(element.get("font_name", "")).strip()
-                    estimated_line_count = self._resolve_estimated_line_count(element)
-                    line_height_pt = self._resolve_line_height_pt(element, font_size)
-                    letter_spacing_em = self._resolve_letter_spacing_em(element)
-                    toc_page_number = str(element.get("toc_page_number", "")).strip()
-                    planned.append(
-                        (
-                            rect,
-                            translated,
-                            label,
-                            font_size,
-                            font_name,
-                            estimated_line_count,
-                            line_height_pt,
-                            letter_spacing_em,
-                            toc_page_number,
-                        )
-                    )
+        if layout_engine == "pretext":
+            return self._plan_pretext_blocks(
+                blocks,
+                render_font_family,
+                render_css,
+                render_archive,
+            )
+        return self._plan_legacy_blocks(blocks)
 
-                planned = self._apply_overlap_aware_letter_spacing(planned)
+    def _plan_legacy_blocks(
+        self, blocks: list[RenderBlockPlan]
+    ) -> list[RenderBlockPlan]:
+        for block in blocks:
+            planned_rect = self._resolve_render_rect(block.original_rect, block.font_size)
+            block.planned_rect = planned_rect
+            block.actual_render_bbox = fitz.Rect(planned_rect)
+            block.shift_pt = max(0.0, planned_rect.y0 - block.original_rect.y0)
+            block.planned_height_pt = planned_rect.height
+            block.top_delta_pt = 0.0
+            block.bottom_delta_pt = 0.0
+            block.final_scale_used = 1.0
+            block.layout_engine = "legacy"
+            block.fallback_reason = None
+            block.fallback_detail = None
+            block.planner_candidate_reason = "none"
+            block.post_render_overlap_pt = 0.0
+            block.render_allowed = True
+        return blocks
 
-                current_state["planned"] = len(planned)
-                for rect, _, _, _, _, _, _, _, _ in planned:
-                    page.add_redact_annot(rect, fill=(1, 1, 1))
-                if planned:
-                    page.apply_redactions()
-
-                for (
-                    rect,
-                    translated,
-                    label,
-                    font_size,
-                    font_name,
-                    estimated_line_count,
-                    line_height_pt,
-                    letter_spacing_em,
-                    toc_page_number,
-                ) in planned:
-                    if toc_page_number:
-                        spare_height, scale = self._render_toc_entry(
-                            page,
-                            rect,
-                            translated,
-                            toc_page_number,
-                            font_size,
-                            render_font_family,
-                            font_name,
-                            render_css,
-                            render_archive,
-                            line_height_pt,
-                        )
-                    else:
-                        html_block = self._build_html(
-                            translated,
-                            label,
-                            font_size,
-                            render_font_family,
-                            font_name,
-                            estimated_line_count,
-                            line_height_pt,
-                            letter_spacing_em,
-                        )
-                        render_rect = self._resolve_render_rect(rect, font_size)
-                        spare_height, scale = self._insert_with_scale_policy(
-                            page,
-                            render_rect,
-                            html_block,
-                            render_css,
-                            render_archive,
-                            font_size,
-                        )
-                    if spare_height == -1:
-                        overflow.append(
-                            {
-                                "page": page_index + 1,
-                                "label": label,
-                                "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
-                                "font_size": font_size,
-                                "line_height_pt": line_height_pt,
-                                "estimated_line_count": estimated_line_count,
-                                "scale": scale,
-                                "text_preview": translated[:160],
-                            }
-                        )
-                current_state["overflow"] = len(overflow)
-                if (
-                    page_index_1based == 1
-                    or page_index_1based == total_pages
-                    or page_index_1based % 5 == 0
-                ):
-                    append_run_log(
-                        workspace.run_log,
-                        f"render=progress current={page_index_1based}/{total_pages} planned={len(planned)} overflow={len(overflow)}",
-                    )
-
-        doc.save(
-            str(workspace.translated_pdf),
-            garbage=4,
-            deflate=True,
-            clean=True,
+    def _plan_pretext_blocks(
+        self,
+        blocks: list[RenderBlockPlan],
+        render_font_family: str | None,
+        render_css: str | None,
+        render_archive: fitz.Archive | None,
+    ) -> list[RenderBlockPlan]:
+        planner_blocks = [
+            LayoutBlock(
+                element={"block_id": block.block_id},
+                original_rect=fitz.Rect(block.original_rect),
+                render_rect=fitz.Rect(
+                    self._resolve_render_rect(block.original_rect, block.font_size)
+                ),
+                translated=block.translated,
+                label=block.label,
+                font_size=block.font_size,
+                font_name=block.font_name,
+                font_family_css=self._resolve_font_family_css(
+                    render_font_family,
+                    block.font_name,
+                ),
+                estimated_line_count=block.estimated_line_count,
+                line_height_pt=block.line_height_pt or round(block.font_size * 1.2, 3),
+                letter_spacing_em=block.letter_spacing_em,
+                toc_page_number=block.toc_page_number,
+            )
+            for block in blocks
+        ]
+        fit_cache: dict[tuple[object, ...], FitValidationResult] = {}
+        planned_blocks = self.layout_planner.plan_page(
+            planner_blocks,
+            render_font_path=self.settings.render_font_path,
+            fit_validator=lambda planner_block, planned_rect, measurement: self._probe_pretext_html_fit(
+                planner_block,
+                planned_rect,
+                measurement,
+                render_font_family,
+                render_css,
+                render_archive,
+                fit_cache,
+            ),
         )
-        shutil.copy2(workspace.translated_pdf, workspace.public_translated_pdf)
-        write_json(workspace.render_report_json, {"overflow": overflow})
-        append_run_log(workspace.run_log, "render=artifacts:done")
-        return len(overflow)
+        planned_by_block_id: dict[str, object] = {}
+        planned_fallback_queue: list[object] = []
+        for planned in planned_blocks:
+            block_id = str(planned.block.element.get("block_id", "")).strip()
+            if block_id:
+                planned_by_block_id[block_id] = planned
+            else:
+                planned_fallback_queue.append(planned)
+        for block in blocks:
+            planned = planned_by_block_id.get(block.block_id)
+            if planned is None and planned_fallback_queue:
+                planned = planned_fallback_queue.pop(0)
+            if planned is None:
+                block.planned_rect = fitz.Rect(
+                    self._resolve_render_rect(block.original_rect, block.font_size)
+                )
+                block.actual_render_bbox = None
+                block.shift_pt = max(0.0, block.planned_rect.y0 - block.original_rect.y0)
+                block.planned_height_pt = block.planned_rect.height
+                block.planned_line_count = block.estimated_line_count
+                block.top_delta_pt = 0.0
+                block.bottom_delta_pt = 0.0
+                block.final_scale_used = 0.0
+                block.layout_engine = "pretext"
+                block.fallback_reason = "planner_missing"
+                block.fallback_detail = "Layout planner did not return a block result."
+                block.planner_candidate_reason = "planner_missing"
+                block.post_render_overlap_pt = 0.0
+                block.render_allowed = False
+                continue
+            block.planned_rect = fitz.Rect(planned.planned_rect)
+            block.actual_render_bbox = (
+                fitz.Rect(planned.actual_render_bbox)
+                if planned.actual_render_bbox is not None
+                else None
+            )
+            block.planned_height_pt = planned.planned_rect.height
+            block.planned_line_count = (
+                planned.pretext_line_count or block.estimated_line_count
+            )
+            block.font_size = planned.render_font_size_pt
+            block.line_height_pt = planned.render_line_height_pt
+            block.letter_spacing_em = planned.render_letter_spacing_em
+            block.shift_pt = planned.vertical_shift_pt
+            block.top_delta_pt = planned.top_delta_pt
+            block.bottom_delta_pt = planned.bottom_delta_pt
+            block.final_scale_used = planned.final_scale_used
+            block.layout_engine = planned.layout_engine
+            block.fallback_reason = planned.layout_fallback
+            block.fallback_detail = (
+                None if planned.layout_fallback == "none" else planned.layout_fallback
+            )
+            block.planner_candidate_reason = planned.planner_candidate_reason
+            block.post_render_overlap_pt = planned.post_render_overlap_pt
+            block.render_allowed = planned.layout_fallback not in {
+                "planner_overflow",
+                "pymupdf_probe_overflow",
+                "postpass_overlap_overflow",
+            }
+        return blocks
+
+    def _probe_pretext_html_fit(
+        self,
+        block: LayoutBlock,
+        planned_rect: fitz.Rect,
+        measurement: dict[str, float | int | None | str],
+        render_font_family: str | None,
+        render_css: str | None,
+        render_archive: fitz.Archive | None,
+        fit_cache: dict[tuple[object, ...], FitValidationResult] | None = None,
+    ) -> FitValidationResult:
+        letter_spacing_em = measurement.get("letter_spacing_em")
+        if not isinstance(letter_spacing_em, (int, float)):
+            letter_spacing_em = None
+        cache_key = (
+            block.label,
+            block.translated,
+            block.font_name,
+            round(planned_rect.width, 3),
+            round(planned_rect.height, 3),
+            round(float(measurement.get("font_size_pt", block.font_size)), 3),
+            round(float(measurement.get("line_height_pt", block.line_height_pt)), 3),
+            None if letter_spacing_em is None else round(float(letter_spacing_em), 3),
+            int(measurement.get("line_count", block.estimated_line_count)),
+        )
+        if fit_cache is not None and cache_key in fit_cache:
+            return self._clone_fit_validation_result(fit_cache[cache_key])
+
+        html_block = self._build_html(
+            block.translated,
+            block.label,
+            float(measurement.get("font_size_pt", block.font_size)),
+            render_font_family,
+            block.font_name,
+            max(int(measurement.get("line_count", block.estimated_line_count)), 1),
+            float(measurement.get("line_height_pt", block.line_height_pt)),
+            letter_spacing_em,
+        )
+
+        scratch_doc = fitz.open()
+        try:
+            scratch_page = scratch_doc.new_page(
+                width=max(planned_rect.x1 + 24.0, 256.0),
+                height=max(planned_rect.y1 + 24.0, 256.0),
+            )
+            spare_height, scale = scratch_page.insert_htmlbox(
+                fitz.Rect(planned_rect),
+                html_block,
+                css=render_css,
+                scale_low=1.0,
+                archive=render_archive,
+                opacity=1,
+                overlay=True,
+            )
+            actual_render_bbox = None
+            if spare_height != -1:
+                actual_render_bbox = self._extract_text_bbox(scratch_page)
+                if actual_render_bbox is None:
+                    actual_render_bbox = fitz.Rect(planned_rect)
+        finally:
+            scratch_doc.close()
+
+        fits = spare_height != -1 and actual_render_bbox is not None
+        result = FitValidationResult(
+            fits=fits,
+            actual_render_bbox=(
+                fitz.Rect(actual_render_bbox)
+                if actual_render_bbox is not None
+                else None
+            ),
+            top_delta_pt=(
+                float(actual_render_bbox.y0 - planned_rect.y0)
+                if actual_render_bbox is not None
+                else 0.0
+            ),
+            bottom_delta_pt=(
+                float(actual_render_bbox.y1 - planned_rect.y1)
+                if actual_render_bbox is not None
+                else 0.0
+            ),
+            used_scale=float(scale),
+            spare_height=float(spare_height),
+        )
+        if fit_cache is not None:
+            fit_cache[cache_key] = self._clone_fit_validation_result(result)
+        return result
+
+    def _clone_fit_validation_result(
+        self,
+        result: FitValidationResult,
+    ) -> FitValidationResult:
+        return FitValidationResult(
+            fits=result.fits,
+            actual_render_bbox=(
+                fitz.Rect(result.actual_render_bbox)
+                if result.actual_render_bbox is not None
+                else None
+            ),
+            top_delta_pt=result.top_delta_pt,
+            bottom_delta_pt=result.bottom_delta_pt,
+            used_scale=result.used_scale,
+            spare_height=result.spare_height,
+        )
+
+    def _extract_text_bbox(self, page: fitz.Page) -> fitz.Rect | None:
+        rects: list[fitz.Rect] = []
+        for word in page.get_text("words"):
+            if len(word) < 4:
+                continue
+            rects.append(fitz.Rect(word[:4]))
+        if rects:
+            return self._union_rects(rects)
+
+        payload = page.get_text("dict")
+        for block in payload.get("blocks", []):
+            if not isinstance(block, dict) or block.get("type") != 0:
+                continue
+            bbox = block.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                rects.append(fitz.Rect(bbox))
+        if rects:
+            return self._union_rects(rects)
+        return None
+
+    def _union_rects(self, rects: list[fitz.Rect]) -> fitz.Rect:
+        current = fitz.Rect(rects[0])
+        for rect in rects[1:]:
+            current |= fitz.Rect(rect)
+        return current
 
     def _render_toc_entry(
         self,
@@ -293,8 +857,10 @@ class RenderService:
         render_css: str | None,
         render_archive: fitz.Archive | None,
         font_size: float,
+        scale_candidates: list[float] | None = None,
     ) -> tuple[float, float]:
-        for scale_low in self._scale_candidates(font_size):
+        candidates = scale_candidates or self._scale_candidates(font_size)
+        for scale_low in candidates:
             spare_height, scale = page.insert_htmlbox(
                 rect,
                 html_block,
@@ -460,6 +1026,15 @@ class RenderService:
         if font_size <= 16.0:
             return [0.88, 0.76, 0.62, 0.0]
         return [0.84, 0.72, 0.58, 0.0]
+
+    def _pretext_scale_candidates(self, font_size: float) -> list[float]:
+        candidates = [1.0, *self._scale_candidates(font_size)]
+        ordered: list[float] = []
+        for value in candidates:
+            rounded = round(value, 3)
+            if rounded not in ordered:
+                ordered.append(rounded)
+        return ordered
 
     def _resolve_render_rect(self, rect: fitz.Rect, font_size: float) -> fitz.Rect:
         if font_size < 16.0:

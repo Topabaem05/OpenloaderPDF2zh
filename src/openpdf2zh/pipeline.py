@@ -10,6 +10,7 @@ from openpdf2zh.models import PipelineRequest, PipelineResult
 from openpdf2zh.services.parser_service import ParserService
 from openpdf2zh.services.render_service import RenderService
 from openpdf2zh.services.translation_service import TranslationService
+from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import append_run_log, prepare_workspace
 
 
@@ -21,8 +22,12 @@ class PipelineRunner:
         self.renderer = RenderService(settings)
 
     def run(
-        self, request: PipelineRequest, progress: Any | None = None
+        self,
+        request: PipelineRequest,
+        progress: Any | None = None,
+        quota_guard: QuotaLease | None = None,
     ) -> PipelineResult:
+        self._check_quota(quota_guard)
         if progress is not None:
             progress(0.02, desc="Preparing workspace")
 
@@ -43,7 +48,7 @@ class PipelineRunner:
         if progress is not None:
             progress(0.15, desc="Parsing PDF with OpenDataLoader")
         append_run_log(workspace.run_log, "phase=parse:start")
-        self.parser.parse(request, workspace)
+        self.parser.parse(request, workspace, quota_guard=quota_guard)
         append_run_log(workspace.run_log, "phase=parse:done")
         append_run_log(workspace.run_log, f"raw_json={workspace.raw_json}")
         append_run_log(workspace.run_log, f"raw_markdown={workspace.raw_markdown}")
@@ -52,7 +57,10 @@ class PipelineRunner:
             progress(0.35, desc="Translating extracted text")
         append_run_log(workspace.run_log, "phase=translate:start")
         units = self.translator.translate_document(
-            request, workspace, progress=progress
+            request,
+            workspace,
+            progress=progress,
+            quota_guard=quota_guard,
         )
         append_run_log(workspace.run_log, f"phase=translate:done units={len(units)}")
         append_run_log(workspace.run_log, f"translated_units={len(units)}")
@@ -60,7 +68,12 @@ class PipelineRunner:
         if progress is not None:
             progress(0.85, desc="Rendering translated PDF")
         append_run_log(workspace.run_log, "phase=render:start")
-        overflow_count = self.renderer.render(request, workspace, progress=progress)
+        overflow_count = self.renderer.render(
+            request,
+            workspace,
+            progress=progress,
+            quota_guard=quota_guard,
+        )
         append_run_log(
             workspace.run_log,
             f"phase=render:done overflow_count={overflow_count}",
@@ -101,6 +114,11 @@ class PipelineRunner:
             target_language=request.target_language,
             summary_markdown=summary,
         )
+
+    def _check_quota(self, quota_guard: QuotaLease | None) -> None:
+        if quota_guard is None:
+            return
+        quota_guard.raise_if_expired()
 
     def _limit_workspace_pdf_pages(self, pdf_path: Path, page_limit: int) -> int:
         if page_limit <= 0:
