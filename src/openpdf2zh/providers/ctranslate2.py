@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
+from typing import Any
 
 import ctranslate2
 import sentencepiece as spm
@@ -9,6 +12,7 @@ from openpdf2zh.providers.base import BaseTranslator
 
 
 class CTranslate2Translator(BaseTranslator):
+    MIN_TRANSFORMERS_MULTILINGUAL_CTRANSLATE2_VERSION = (4, 7, 1)
     DIRECTIONAL_MODEL_DIRS = {
         "English": "quickmt-ko-en",
         "Korean": "quickmt-en-ko",
@@ -25,28 +29,54 @@ class CTranslate2Translator(BaseTranslator):
     def __init__(self, model_dir: str, tokenizer_path: str) -> None:
         self._model_root = Path(model_dir).expanduser().resolve()
         self._tokenizer_path = tokenizer_path.strip()
+        self._use_transformers_multilingual_tokenizer = (
+            self._has_transformers_multilingual_tokenizer_assets()
+        )
 
         if not self._model_root.is_dir():
             raise RuntimeError(
                 f"CTranslate2 model directory was not found: {self._model_root}. Check OPENPDF2ZH_CTRANSLATE2_MODEL_DIR."
             )
-        if self._tokenizer_path:
+        if self._tokenizer_path and not self._use_transformers_multilingual_tokenizer:
             tokenizer_model_path = Path(self._tokenizer_path).expanduser().resolve()
             if not tokenizer_model_path.is_file():
                 raise RuntimeError(
                     f"CTranslate2 tokenizer model was not found: {tokenizer_model_path}. Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
                 )
+        self._validate_runtime_support()
         pointer_model = self._first_directional_lfs_pointer()
         if pointer_model is not None:
             self._raise_for_lfs_pointer(pointer_model)
-        if not self._directional_assets_ready() and not self._tokenizer_path:
+        if (
+            not self._directional_assets_ready()
+            and not self._tokenizer_path
+            and not self._use_transformers_multilingual_tokenizer
+        ):
             raise RuntimeError(
-                "CTranslate2 tokenizer model is missing. Set OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH or provide directional model subdirectories."
+                "CTranslate2 tokenizer assets are missing. Set OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH, provide bundled multilingual tokenizer files, or provide directional model subdirectories."
             )
 
         self._translator_cache: dict[str, ctranslate2.Translator] = {}
         self._source_tokenizer_cache: dict[str, spm.SentencePieceProcessor] = {}
         self._target_tokenizer_cache: dict[str, spm.SentencePieceProcessor] = {}
+        self._multilingual_tokenizer_cache: dict[str, Any] = {}
+
+    def _validate_runtime_support(self) -> None:
+        if not self._use_transformers_multilingual_tokenizer:
+            return
+        current_version = self._parse_version_tuple(ctranslate2.__version__)
+        if current_version >= self.MIN_TRANSFORMERS_MULTILINGUAL_CTRANSLATE2_VERSION:
+            return
+
+        required_version = ".".join(
+            str(part)
+            for part in self.MIN_TRANSFORMERS_MULTILINGUAL_CTRANSLATE2_VERSION
+        )
+        raise RuntimeError(
+            "NLLB-style CTranslate2 bundles require "
+            f"ctranslate2>={required_version}. Current version: "
+            f"{ctranslate2.__version__}. Upgrade ctranslate2 and retry."
+        )
 
     def translate(self, text: str, *, target_language: str, model: str) -> str:
         if self._directional_assets_ready():
@@ -55,10 +85,9 @@ class CTranslate2Translator(BaseTranslator):
 
     def _translate_multilingual(self, text: str, target_language: str) -> str:
         translator = self._ensure_multilingual_translator()
-        tokenizer = self._ensure_multilingual_tokenizer()
-        source_tokens = tokenizer.encode(text, out_type=str)
         source_tag = self._detect_source_language_tag(text)
         target_tag = self._resolve_target_language_tag(target_language)
+        source_tokens = self._encode_multilingual_source_tokens(text, source_tag)
         batch = [[source_tag, *source_tokens]]
         target_prefix = [[target_tag]]
 
@@ -75,7 +104,7 @@ class CTranslate2Translator(BaseTranslator):
         tokens = list(results[0].hypotheses[0])
         if tokens and tokens[0] == target_tag:
             tokens = tokens[1:]
-        translated = tokenizer.decode(tokens).strip()
+        translated = self._decode_multilingual_tokens(tokens).strip()
         if not translated:
             raise RuntimeError("CTranslate2 returned an empty translation output.")
         return translated
@@ -118,6 +147,90 @@ class CTranslate2Translator(BaseTranslator):
             self._source_tokenizer_cache[key] = tokenizer
             self._target_tokenizer_cache[key] = tokenizer
         return self._source_tokenizer_cache[key]
+
+    def _encode_multilingual_source_tokens(
+        self,
+        text: str,
+        source_language_tag: str,
+    ) -> list[str]:
+        if self._use_transformers_multilingual_tokenizer:
+            tokenizer = self._ensure_transformers_multilingual_tokenizer()
+            tokenizer.src_lang = source_language_tag
+            token_ids = tokenizer.encode(text)
+            return list(tokenizer.convert_ids_to_tokens(token_ids))
+
+        tokenizer = self._ensure_multilingual_tokenizer()
+        return tokenizer.encode(text, out_type=str)
+
+    def _decode_multilingual_tokens(self, tokens: list[str]) -> str:
+        if self._use_transformers_multilingual_tokenizer:
+            tokenizer = self._ensure_transformers_multilingual_tokenizer()
+            token_ids = tokenizer.convert_tokens_to_ids(tokens)
+            return tokenizer.decode(
+                token_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+
+        tokenizer = self._ensure_multilingual_tokenizer()
+        return tokenizer.decode(tokens)
+
+    def _ensure_transformers_multilingual_tokenizer(self) -> Any:
+        key = "multilingual"
+        if key not in self._multilingual_tokenizer_cache:
+            self._multilingual_tokenizer_cache[key] = (
+                self._load_transformers_multilingual_tokenizer()
+            )
+        return self._multilingual_tokenizer_cache[key]
+
+    def _load_transformers_multilingual_tokenizer(self) -> Any:
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as exc:
+            raise RuntimeError(
+                "Transformers tokenizer assets were detected for the CTranslate2 model, but `transformers` is not installed."
+            ) from exc
+
+        return AutoTokenizer.from_pretrained(
+            str(self._model_root),
+            src_lang="eng_Latn",
+            clean_up_tokenization_spaces=True,
+            use_fast=False,
+        )
+
+    def _has_transformers_multilingual_tokenizer_assets(self) -> bool:
+        tokenizer_config_path = self._model_root / "tokenizer_config.json"
+        model_config_path = self._model_root / "config.json"
+        sentencepiece_path = self._model_root / "sentencepiece.bpe.model"
+        if (
+            not tokenizer_config_path.is_file()
+            or not model_config_path.is_file()
+            or not sentencepiece_path.is_file()
+        ):
+            return False
+
+        try:
+            payload = json.loads(tokenizer_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        tokenizer_class = str(payload.get("tokenizer_class", "")).strip()
+        return tokenizer_class == "NllbTokenizer"
+
+    @staticmethod
+    def _parse_version_tuple(raw_version: str) -> tuple[int, int, int]:
+        parts: list[int] = []
+        for segment in raw_version.split("."):
+            digits = "".join(char for char in segment if char.isdigit())
+            if not digits:
+                break
+            parts.append(int(digits))
+            if len(parts) == 3:
+                break
+        while len(parts) < 3:
+            parts.append(0)
+        return tuple(parts[:3])
 
     def _ensure_directional_runtime(
         self, target_language: str

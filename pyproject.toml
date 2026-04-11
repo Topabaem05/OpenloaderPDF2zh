@@ -9,7 +9,7 @@ description = "Python-only Gradio skeleton for PDF translation with OpenDataLoad
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "ctranslate2>=4,<5",
+  "ctranslate2>=4.7.1,<5",
   "gradio>=6.10,<7",
   "huggingface_hub>=0.36,<1",
   "opendataloader-pdf>=2.1.1,<3",
