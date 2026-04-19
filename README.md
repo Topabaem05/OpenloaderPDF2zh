@@ -1,184 +1,62 @@
-# OpenPDF2ZH Gradio
+# OpenPDF2ZH Workbench
 
-Python-only skeleton for a PDF translation pipeline built on:
+<p align="center">
+  <a href="docs/readme-video/openpdf2zh-usage-guide.mp4">
+    <img src="docs/readme-video/openpdf2zh-usage-guide-preview.gif" alt="OpenPDF2ZH app usage guide video preview" width="960" />
+  </a>
+</p>
 
-- OpenDataLoader-PDF for parsing, layout analysis, and bounding boxes
-- CTranslate2 or OpenRouter for translation
-- PyMuPDF for layout-aware PDF re-rendering
-- Gradio for a simple local desktop-like web UI
+<p align="center">
+  <a href="docs/readme-video/openpdf2zh-usage-guide.mp4">Watch the app usage guide video (MP4)</a>
+</p>
 
-## Goals
-
-- Keep the implementation Python-only
-- Replace the earlier Electron plan with a simple Gradio app
-- Preserve layout as much as possible using bounding boxes
-- Produce stable artifacts for downstream apps:
-  - `translated_mono.pdf`
-  - `structured.json`
-  - `result.md`
+`openpdf2zh_gradio` runs the FastAPI backend for the PDF translation pipeline and exposes the current Gradio UI at `/gradio`. The repository also contains the React workbench, but the Docker quick start below is Gradio-first and does not build the frontend.
 
 ## Quick Start
 
-```bash
-python -m venv .venv
-. .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -U pip
-pip install -e .
-cp .env.example .env  # Windows: copy .env.example .env
-python app.py
-```
-
-`pip install -e .` pulls in `opendataloader-pdf` for parsing. To refresh the upstream package in the active environment explicitly, run:
+Run the app with one command:
 
 ```bash
-python -m pip install -U "opendataloader-pdf"
+make up
 ```
 
-Upstream project: <https://github.com/opendataloader-project/opendataloader-pdf>
-
-## Railway deployment
-
-This repository now includes:
-
-- `railway.json` for the start command: `python app.py`
-- `railpack.json` for Railway's default Railpack builder
-- `nixpacks.toml` for Nixpacks builds
-
-At runtime, the app automatically honors Railway's `PORT` environment variable, binds to `0.0.0.0`, and prioritizes Railway's assigned port over local defaults when that variable is present.
-
-Both Railpack and Nixpacks configs install Java 17 for OpenDataLoader-PDF parsing, and the build phase runs `scripts/railway-build.sh` to materialize the real quickmt model binaries from Hugging Face before the app starts.
-
-The Railway build now downloads the directional quickmt models from Hugging Face by default:
-
-- `quickmt/quickmt-ko-en`
-- `quickmt/quickmt-en-ko`
-
-These default repositories are public, so Railway does not need a token for the default path.
-
-You can override them with these environment variables:
-
-- `OPENPDF2ZH_QUICKMT_KO_EN_HF_REPO_ID`
-- `OPENPDF2ZH_QUICKMT_KO_EN_HF_REVISION`
-- `OPENPDF2ZH_QUICKMT_EN_KO_HF_REPO_ID`
-- `OPENPDF2ZH_QUICKMT_EN_KO_HF_REVISION`
-
-If the Hugging Face repositories are private or gated, set `OPENPDF2ZH_QUICKMT_HF_TOKEN` (or standard `HF_TOKEN`) in Railway.
-
-## Requirements
-
-- Python 3.10+
-- Java 11+
-- Local CTranslate2 model files for translation
-
-If a deployed `model.bin` is only a Git LFS pointer file instead of the real binary, CTranslate2 will not start. This repository now avoids that by downloading the real quickmt binaries from Hugging Face during the Railway build.
-
-## Local CTranslate2
-
-If you want to run translation locally, provide a converted CTranslate2 model directory and its SentencePiece tokenizer model.
-
-Environment variables:
+If you want to override provider or model settings before booting, copy the example environment file first:
 
 ```bash
-OPENPDF2ZH_CTRANSLATE2_MODEL_DIR=/absolute/path/to/models
-OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH=/absolute/path/to/tokenizer.model
+cp .env.example .env
 ```
 
-In the UI, choose **ctranslate2** and set the same two paths in the form.
+## Raw Docker Command
 
-The app also supports a directional model root that contains:
-
-- `quickmt-ko-en/`
-- `quickmt-en-ko/`
-
-In that layout, each subdirectory should contain `model.bin`, `src.spm.model`, and `tgt.spm.model`, and `OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH` can be left blank.
-
-If `OPENPDF2ZH_CTRANSLATE2_MODEL_DIR` is not set, the app now defaults to the repository-local `./models` directory, which is safer for deployed server environments that run the app from the project root.
-
-## Rendering notes
-
-- The app preserves detected source text sizes from the OpenDataLoader parsed JSON when re-rendering translated text.
-- You can preview the translated PDF directly in the Gradio UI after a run finishes.
-- Optional custom font rendering is supported through PyMuPDF HTML rendering with `@font-face` and an archive-backed font file path.
-- Layout engine options:
-  - `legacy` (default): keeps the existing redact-and-insert behavior.
-  - `pretext`: uses a headless browser helper to pre-measure translated text height, then shifts only later boxes in the same column cluster downward to reduce overlap.
-- In pretext mode, the renderer still redacts the original detected bbox and renders into the planned bbox.
-- Duplicate-detection cleanup for parsed boxes uses an NMS-like rule: near-identical boxes are removed by high IoU, and contained duplicates are removed only when IoM is high and the boxes are still similar in size.
-- Tune it with `OPENPDF2ZH_DUPLICATE_BOX_IOU_THRESHOLD` (default `0.85`) and `OPENPDF2ZH_DUPLICATE_BOX_IOM_THRESHOLD` (default `0.9`). Higher values keep more boxes; lower values remove duplicates more aggressively.
-- To force a specific TTF/TTC/OTF during rendering, set:
+`make up` wraps the standard Docker Compose command:
 
 ```bash
-OPENPDF2ZH_RENDER_FONT_PATH=/absolute/path/to/font.ttf
+docker compose up --build
 ```
 
-Pretext helper requirements:
+Useful helpers:
 
 ```bash
-npm install --prefix tools/pretext_layout_helper
-npx --prefix tools/pretext_layout_helper playwright install chromium
-printf '%s' '{"requests":[{"request_id":"demo:1.000","text":"Hello world","font_family_css":"sans-serif","font_size_px":12,"line_height_px":14,"max_width_px":120}],"render_font_path":""}' \
-  | node tools/pretext_layout_helper/measure.mjs
+make logs
+make down
 ```
 
-If pretext mode is selected but the helper runtime is unavailable, the run fails with an explicit error and suggests switching back to `legacy`.
+## Open the App
 
-## Environment Variables
+- Gradio UI: <http://localhost:7860/gradio>
+- Root route: <http://localhost:7860/> is not the Docker quick-start UI
 
-See `.env.example`.
+Uploads and generated files persist in `./workspace`.
 
-Additional rendering controls:
+## Minimal Configuration
 
-- `OPENPDF2ZH_RENDER_LAYOUT_ENGINE`: `legacy` or `pretext` (default: `legacy`)
-- `OPENPDF2ZH_PRETEXT_HELPER_PATH`: optional absolute path override for the browser helper script
-- `OPENPDF2ZH_PRETEXT_HELPER_TIMEOUT_SECONDS`: helper timeout in seconds (default: `20`)
+- Docker injects `OPENPDF2ZH_HOST=0.0.0.0`, `OPENPDF2ZH_PORT=7860`, and `OPENPDF2ZH_WORKSPACE_ROOT=/app/workspace`.
+- The default Docker setup mounts `${OPENPDF2ZH_HOST_MODEL_DIR:-./models}` to `/app/models`, so the bundled `quickmt-ko-en/` and `quickmt-en-ko/` directories work without extra steps.
+- To use a different local CTranslate2 directory, set `OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models` in `.env` before `make up`.
+- To switch to OpenRouter, choose `openrouter` in the UI and enter the API key in the form when you start a translation.
 
-### Server queue controls
+## Troubleshooting
 
-The Gradio server already uses a bounded in-process queue for document jobs.
-
-- `OPENPDF2ZH_JOB_QUEUE_CONCURRENCY`: maximum number of translation jobs to run at the same time
-- `OPENPDF2ZH_JOB_QUEUE_MAX_SIZE`: maximum number of queued requests waiting for a worker slot
-- `OPENPDF2ZH_WORKSPACE_RETENTION_HOURS`: how long uploaded/generated workspaces stay on disk before automatic deletion
-- `OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS`: how often the server sweeps for expired workspaces
-
-For a single host, start conservatively with small values such as:
-
-```bash
-OPENPDF2ZH_JOB_QUEUE_CONCURRENCY=2
-OPENPDF2ZH_JOB_QUEUE_MAX_SIZE=8
-OPENPDF2ZH_WORKSPACE_RETENTION_HOURS=24
-OPENPDF2ZH_WORKSPACE_CLEANUP_INTERVAL_SECONDS=600
-```
-
-If the queue is saturated, the app now returns an explicit busy message instead of silently accepting more heavy jobs.
-Completed workspaces are also deleted automatically after the configured retention period, so uploaded PDFs and translated outputs do not remain on the server indefinitely.
-
-## Project Layout
-
-```text
-openpdf2zh_gradio/
-├─ app.py
-├─ agent.md
-├─ pyproject.toml
-├─ .env.example
-├─ requirements.txt
-├─ src/openpdf2zh/
-│  ├─ config.py
-│  ├─ models.py
-│  ├─ pipeline.py
-│  ├─ ui.py
-│  ├─ providers/
-│  │  ├─ base.py
-│  │  ├─ ctranslate2.py
-│  ├─ services/
-│  │  ├─ parser_service.py
-│  │  ├─ render_service.py
-│  │  └─ translation_service.py
-│  └─ utils/
-│     └─ files.py
-```
-
-## Notes
-
-- This repository is a scaffold, not a finished production app.
-- Rendering uses a conservative redact-and-reinsert flow and records overflow cases in a report file.
+- `make: command not found`: install `make` or run `docker compose up --build` directly.
+- `docker: command not found`: install Docker Desktop or Docker Engine first.
+- If CTranslate2 cannot find a model, verify that the mounted host directory contains the expected model files and is available at `/app/models` in the container.
