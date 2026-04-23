@@ -2,573 +2,578 @@ import {
   AbsoluteFill,
   Img,
   Sequence,
-  spring,
-  staticFile,
-  useCurrentFrame,
   interpolate,
+  staticFile,
+  spring,
+  useCurrentFrame,
 } from "remotion";
 import React from "react";
 
-const assets = {
-  ui: staticFile("openpdf2zh-ui-current.png"),
-  controls: staticFile("openpdf2zh-service-dropdown.png"),
-  translated: staticFile("openpdf2zh-translated-page.png"),
+type ParseMetric = {
+  run: string;
+  parseSeconds: number;
+  pages: number;
+  source: "legacy" | "pretext" | "mixed";
+  note: string;
+  speedClass: "fast" | "neutral" | "slow";
 };
 
-const palette = {
-  bg1: "#f8f4ee",
-  bg2: "#eff4ff",
-  ink: "#14203a",
-  accent: "#4f63ff",
-};
-
-const pulse = (
-  frame: number,
-  startFrame: number,
-  stiffness = 150,
-): number => {
-  if (frame <= startFrame) {
-    return 0;
-  }
-
-  return spring({
-    frame: frame - startFrame,
-    fps: 30,
-    config: {
-      damping: 13,
-      mass: 0.65,
-      stiffness,
-    },
-    from: 0,
-    to: 1,
-  });
-};
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, value));
-
-const sceneReveal = (frame: number, start: number, length: number): number => {
-  const normalized = clamp((frame - start) / length, 0, 1);
-  return interpolate(normalized, [0, 0.45, 1], [0, 1, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-};
-
-const Bubble = ({
-  frame,
-  start,
-  text,
-  x,
-  y,
-  accent,
-}: {
-  frame: number;
+type Bubble = {
   start: number;
   text: string;
   x: number;
   y: number;
-  accent?: boolean;
-}) => {
-  const bounce = pulse(frame, start, 180);
-  const opacity = sceneReveal(frame, start - 2, 12);
-  const yOffset = interpolate(bounce, [0, 0.45, 1], [24, -4, 0]);
+  align: "left" | "right";
+};
+
+const assets = {
+  ui: staticFile("openpdf2zh-ui-current.png"),
+};
+
+const palette = {
+  backgroundStart: "#000212",
+  backgroundEnd: "#070c21",
+  card: "rgba(255, 255, 255, 0.94)",
+  cardBorder: "rgba(255, 255, 255, 0.18)",
+  text: "#f5f7ff",
+  ink: "#17253f",
+  muted: "#a3b1c8",
+  accent: "#3d82ff",
+  accentStrong: "#0f5ce0",
+  success: "#2dd4bf",
+  warn: "#ffd166",
+};
+
+const parseData: ParseMetric[] = [
+  {
+    run: "legacy quickmt",
+    parseSeconds: 1,
+    pages: 12,
+    source: "legacy",
+    note: "PDF2ZH 기본 모드",
+    speedClass: "fast",
+  },
+  {
+    run: "legacy nllb",
+    parseSeconds: 2,
+    pages: 12,
+    source: "legacy",
+    note: "번역기 전환 테스트",
+    speedClass: "neutral",
+  },
+  {
+    run: "pretext v1",
+    parseSeconds: 5,
+    pages: 7,
+    source: "pretext",
+    note: "백테스트 재실행",
+    speedClass: "slow",
+  },
+  {
+    run: "pretext v2",
+    parseSeconds: 5,
+    pages: 7,
+    source: "pretext",
+    note: "렌더 파이프라인 안정화",
+    speedClass: "slow",
+  },
+  {
+    run: "pretext v3",
+    parseSeconds: 6,
+    pages: 7,
+    source: "pretext",
+    note: "확장 실험",
+    speedClass: "slow",
+  },
+];
+
+const legacyRuns = parseData.filter((item) => item.source !== "pretext");
+const pretextRuns = parseData.filter((item) => item.source === "pretext");
+
+const maxParseSeconds = Math.max(...parseData.map((item) => item.parseSeconds));
+const bestParseSeconds = Math.min(...parseData.map((item) => item.parseSeconds));
+const avgLegacyParse =
+  legacyRuns.reduce((sum, item) => sum + item.parseSeconds, 0) / legacyRuns.length;
+const avgPretextParse =
+  pretextRuns.reduce((sum, item) => sum + item.parseSeconds, 0) / pretextRuns.length;
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
+const springIn = (frame: number, startFrame: number): number =>
+  spring({
+    frame: frame - startFrame,
+    fps: 30,
+    config: {
+      damping: 12,
+      mass: 0.75,
+      stiffness: 110,
+      overshootClamping: false,
+    },
+    from: 0,
+    to: 1,
+  });
+
+const reveal = (frame: number, start: number, duration: number): number =>
+  interpolate(
+    clamp((frame - start) / duration, 0, 1),
+    [0, 1],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    },
+  );
+
+const GlassPanel: React.FC<{
+  children: React.ReactNode;
+  top: number;
+  left: number;
+  width: number;
+  height?: number;
+  frame: number;
+  delay: number;
+  zIndex?: number;
+}> = ({ children, top, left, width, height, frame, delay, zIndex = 1 }) => {
+  const inValue = springIn(frame, delay);
 
   return (
     <div
       style={{
         position: "absolute",
-        left: x,
-        top: y,
-        transform: `translateY(${yOffset}px) scale(${1 + bounce * 0.06})`,
-        transformOrigin: "center bottom",
-        borderRadius: 24,
-        padding: "22px 24px",
-        maxWidth: 390,
-        background: accent
-          ? "rgba(255, 255, 255, 0.94)"
-          : "rgba(20, 32, 58, 0.9)",
-        color: accent ? "#14203a" : "#f6f8fb",
-        fontSize: 34,
-        fontWeight: 800,
-        letterSpacing: -0.3,
-        lineHeight: 1.2,
-        boxShadow: accent
-          ? "0 16px 44px rgba(20, 32, 58, 0.14)"
-          : "0 16px 40px rgba(10, 16, 30, 0.25)",
-        opacity,
-        zIndex: 4,
+        top,
+        left,
+        width,
+        height: height ?? "auto",
+        padding: "24px",
+        borderRadius: 26,
+        background: palette.card,
+        border: `1px solid ${palette.cardBorder}`,
+        boxShadow: "0 22px 64px rgba(5, 8, 25, 0.45)",
+        transform: `translateY(${interpolate(inValue, [0, 0.8, 1], [14, 0, 0])}px) scale(${interpolate(
+          inValue,
+          [0, 1],
+          [0.99, 1],
+        )})`,
+        opacity: inValue,
+        zIndex,
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
+const Kicker = ({ text, frame, delay }: { text: string; frame: number; delay: number }) => {
+  const revealValue = reveal(frame, delay, 12);
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 34,
+        left: 52,
+        zIndex: 10,
+        color: "rgba(255,255,255,0.78)",
+        letterSpacing: 2,
+        fontSize: 18,
+        fontWeight: 600,
+        textTransform: "uppercase",
+        opacity: revealValue,
       }}
     >
       {text}
+    </div>
+  );
+};
+
+const H1 = ({ children }: { children: React.ReactNode }) => (
+  <div
+    style={{
+      fontSize: 56,
+      color: palette.text,
+      letterSpacing: -1.2,
+      fontWeight: 800,
+      lineHeight: 1.04,
+    }}
+  >
+    {children}
+  </div>
+);
+
+const Paragraph = ({
+  children,
+  small = false,
+}: {
+  children: React.ReactNode;
+  small?: boolean;
+}) => (
+  <div
+    style={{
+      marginTop: 14,
+      color: "rgba(255,255,255,0.84)",
+      fontSize: small ? 28 : 32,
+      fontWeight: small ? 500 : 600,
+      lineHeight: 1.4,
+    }}
+  >
+    {children}
+  </div>
+);
+
+const MetricBar: React.FC<{
+  title: string;
+  value: number;
+  max: number;
+  tone: "fast" | "neutral" | "slow";
+  rank: string;
+  frame: number;
+  delay: number;
+  detail: string;
+}> = ({ title, value, max, tone, rank, frame, delay, detail }) => {
+  const grow = springIn(frame, delay);
+  const ratio = (value / max) * 100;
+  const barColor =
+    tone === "fast"
+      ? palette.success
+      : tone === "neutral"
+        ? palette.warn
+        : "#ef4444";
+
+  return (
+    <div
+      style={{
+        marginBottom: 16,
+        opacity: reveal(frame, delay, 10),
+        transform: `translateX(${interpolate(grow, [0, 1], [18, 0])}px)`,
+      }}
+    >
       <div
         style={{
-          position: "absolute",
-          width: 16,
-          height: 16,
-          borderRadius: 99,
-          background: accent ? palette.accent : "#ffd66d",
-          right: 18,
-          bottom: -8,
-          transform: `rotate(${bounce * 18}deg)`,
+          display: "flex",
+          justifyContent: "space-between",
+          color: "#0f1933",
+          fontWeight: 700,
+          fontSize: 24,
+        }}
+      >
+        <span>{title}</span>
+        <span style={{ color: palette.muted }}>{rank}</span>
+      </div>
+      <div
+        style={{
+          marginTop: 8,
+          height: 14,
+          borderRadius: 999,
+          background: "rgba(15, 25, 45, 0.12)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${ratio}%`,
+            background: barColor,
+            boxShadow: `0 0 10px ${barColor}`,
+            borderRadius: 999,
+          }}
+        />
+      </div>
+      <div style={{ marginTop: 6, color: palette.ink, fontWeight: 600, fontSize: 18 }}>{detail}</div>
+    </div>
+  );
+};
+
+const UiFrame = ({ frame, delay }: { frame: number; delay: number }) => {
+  const float = interpolate(springIn(frame, delay), [0, 1], [6, 0]);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: 54,
+        width: 1140,
+        height: 1018,
+        boxSizing: "border-box",
+        transform: `translate(-50%, ${float}px)`,
+        borderRadius: 28,
+        padding: 14,
+        background: "rgba(255,255,255,0.96)",
+        boxShadow: "0 35px 95px rgba(3, 6, 20, 0.55)",
+        border: `1px solid ${palette.cardBorder}`,
+        overflow: "hidden",
+      }}
+    >
+      <Img
+        src={assets.ui}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          objectPosition: "top center",
+          borderRadius: 20,
         }}
       />
     </div>
   );
 };
 
-const SceneCard = ({
-  frame,
-  shot,
-  label,
-  title,
-  description,
-  bubbles,
-  x = 0,
-}: {
-  frame: number;
-  shot: keyof typeof assets;
-  label: string;
-  title: string;
-  description: string;
-  bubbles: Array<{
-    text: string;
-    x: number;
-    y: number;
-    accent?: boolean;
-    delay: number;
-  }>;
-  x?: number;
-}) => {
-  const inShot = pulse(frame, 2, 110);
-  const zoom = interpolate(inShot, [0, 0.6, 1], [1.06, 0.99, 1]);
-  const moveX = interpolate(inShot, [0, 1], [x - 60, x]);
-
+const FloatingBubble = ({ frame, bubble }: { frame: number; bubble: Bubble }) => {
+  const progress = springIn(frame, bubble.start);
   return (
-    <AbsoluteFill
+    <div
       style={{
-        opacity: sceneReveal(frame, 0, 14),
-        overflow: "hidden",
+        position: "absolute",
+        left: bubble.x,
+        top: bubble.y,
+        padding: "12px 18px",
+        borderRadius: 16,
+        fontSize: 24,
+        fontWeight: 700,
+        color: bubble.align === "left" ? palette.text : "#15203a",
+        background:
+          bubble.align === "left" ? "rgba(13, 27, 52, 0.92)" : "rgba(255,255,255,0.96)",
+        border: `1px solid ${palette.cardBorder}`,
+        boxShadow: "0 14px 34px rgba(6,10,20,0.25)",
+        opacity: reveal(frame, bubble.start - 2, 10),
+        transform: `translateY(${interpolate(progress, [0, 1], [10, 0])}px)`,
+        zIndex: 4,
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          left: moveX,
-          top: 86,
-          right: 32,
-          bottom: 40,
-          borderRadius: 32,
-          background: "rgba(255,255,255,0.88)",
-          boxShadow: "0 42px 110px rgba(16, 24, 44, 0.2)",
-          border: "1px solid rgba(255,255,255,0.8)",
-          overflow: "hidden",
-        }}
-      >
-        <Img
-          src={assets[shot]}
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            transform: `scale(${zoom})`,
-            transformOrigin: "center center",
-          }}
-        />
-      </div>
-
-      <div
-        style={{
-          position: "absolute",
-          top: 34,
-          left: 56,
-          right: 56,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          zIndex: 3,
-          opacity: sceneReveal(frame, 2, 12),
-          transform: `translateY(${interpolate(inShot, [0, 1], [12, 0])}px)`,
-        }}
-      >
-        <div
-          style={{
-            borderRadius: 999,
-            padding: "14px 18px",
-            background: "rgba(14, 25, 45, 0.86)",
-            color: "white",
-            fontSize: 24,
-            fontWeight: 800,
-            letterSpacing: 0.2,
-          }}
-        >
-          {label}
-        </div>
-        <div
-          style={{
-            borderRadius: 999,
-            padding: "14px 18px",
-            background: "rgba(79, 99, 255, 0.16)",
-            color: palette.accent,
-            fontSize: 20,
-            fontWeight: 700,
-          }}
-        >
-          OpenPDF2ZH
-        </div>
-      </div>
-
-      <div
-        style={{
-          position: "absolute",
-          left: 56,
-          top: 132,
-          color: palette.ink,
-          zIndex: 3,
-          opacity: sceneReveal(frame, 6, 20),
-          textShadow: "0 4px 14px rgba(255,255,255,0.65)",
-        }}
-      >
-        <div style={{ fontSize: 26, fontWeight: 700, opacity: 0.78 }}>{title}</div>
-        <div style={{ fontSize: 56, lineHeight: 1.05, fontWeight: 800, maxWidth: 760 }}>
-          {description}
-        </div>
-      </div>
-
-      {bubbles.map((bubble, index) => (
-        <Bubble
-          key={`${bubble.text}-${index}`}
-          frame={frame}
-          start={bubble.delay}
-          text={bubble.text}
-          x={bubble.x}
-          y={bubble.y}
-          accent={bubble.accent}
-        />
-      ))}
-    </AbsoluteFill>
+      {bubble.text}
+    </div>
   );
 };
 
 export const MyComposition = () => {
   const frame = useCurrentFrame();
-  const intro = sceneReveal(frame, 0, 20);
+  const introProgress = reveal(frame, 0, 18);
 
   return (
-    <AbsoluteFill style={{ background: `linear-gradient(140deg, ${palette.bg1}, ${palette.bg2})` }}>
+    <AbsoluteFill
+      style={{
+        background: `linear-gradient(155deg, ${palette.backgroundStart} 0%, ${palette.backgroundEnd} 58%, #060f24 100%)`,
+      }}
+    >
       <div
         style={{
           position: "absolute",
           inset: 0,
-          backgroundImage: `radial-gradient(circle at 13% 20%, rgba(79, 99, 255, 0.18) 0, transparent 420px), radial-gradient(circle at 84% 78%, rgba(255, 212, 106, 0.24) 0, transparent 360px)`,
+          backgroundImage:
+            "radial-gradient(circle at 14% 16%, rgba(61,130,255,0.16) 0, transparent 430px), radial-gradient(circle at 88% 86%, rgba(45,212,191,0.18) 0, transparent 380px)",
         }}
       />
 
       <Sequence from={0} durationInFrames={120}>
-        <AbsoluteFill>
-          <div
-            style={{
-              position: "absolute",
-              left: "calc(50% - 560px)",
-              top: 280,
-              width: 1120,
-              display: "flex",
-              flexDirection: "column",
-              gap: 22,
-              alignItems: "center",
-              textAlign: "center",
-              opacity: interpolate(intro, [0, 0.2, 1], [0, 1, 1]),
-              transform: `translateY(${interpolate(intro, [0, 0.5, 1], [30, -6, 0])}px)`,
-            }}
-          >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: introProgress,
+            transform: `translateY(${interpolate(introProgress, [0, 1], [12, 0])}px)`,
+            textAlign: "left",
+            paddingLeft: 72,
+          }}
+        >
+          <div style={{ width: 1120 }}>
             <div
               style={{
+                display: "inline-block",
+                padding: "12px 16px",
+                borderRadius: 999,
+                background: "rgba(13, 27, 52, 0.7)",
+                border: "1px solid rgba(255,255,255,0.16)",
+                color: "#cfe0ff",
+                fontSize: 20,
+                fontWeight: 700,
+                letterSpacing: 1,
+              }}
+            >
+              Gradio-first walkthrough
+            </div>
+            <H1>파싱 속도로 시작되는 UX</H1>
+            <Paragraph>PDF 업로드 다음, 가장 먼저 확인해야 하는 건 번역 품질보다 파싱 속도입니다.</Paragraph>
+            <Paragraph small={false}>백테스트 로그를 바탕으로 한 그레이스풀한 파싱 비교</Paragraph>
+            <div
+              style={{
+                marginTop: 28,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "14px 18px",
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.9)",
+                color: palette.ink,
                 fontSize: 26,
-                color: "#4e5a6f",
-                letterSpacing: 1.3,
-                fontWeight: 800,
-                textTransform: "uppercase",
+                fontWeight: 700,
               }}
             >
-              Gradio usage walkthrough
-            </div>
-            <div
-              style={{
-                fontSize: 90,
-                color: "#15203a",
-                fontWeight: 900,
-                lineHeight: 1,
-                letterSpacing: -1.8,
-              }}
-            >
-              Playful UI guide for your PDF translator
-            </div>
-            <div
-              style={{
-                marginTop: 6,
-                maxWidth: 720,
-                color: "#314159",
-                fontSize: 32,
-                lineHeight: 1.4,
-                opacity: 0.94,
-              }}
-            >
-              Bounce through the main interactions: upload file, set options, translate, then
-              review output.
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 11,
+                  height: 11,
+                  borderRadius: 999,
+                  background: palette.success,
+                }}
+              />
+              파싱 단축이 체감 속도를 바꿉니다
             </div>
           </div>
-          <div
-            style={{
-              position: "absolute",
-              left: "50%",
-              top: 520,
-              transform: `translateX(-50%) translateY(${interpolate(pulse(frame, 12, 120), [0, 1], [0, -12])}px)`,
-              opacity: sceneReveal(frame, 8, 20),
-              color: palette.accent,
-              fontSize: 36,
-              fontWeight: 900,
-              letterSpacing: -0.6,
-              background: "rgba(255, 255, 255, 0.78)",
-              padding: "14px 26px",
-              borderRadius: 999,
-              border: "1px solid rgba(255,255,255,0.8)",
-            }}
-          >
-            클릭 가능한 곳만 따라가세요
-          </div>
-
-          <SceneCard
-            frame={frame}
-            shot="ui"
-            label="01 / UPLOAD"
-            title="Step 1"
-            description="Upload your PDF to unlock translation actions"
-            bubbles={[
-              {
-                text: "Drop or select a PDF file",
-                x: 520,
-                y: 310,
-                accent: false,
-                delay: 30,
-              },
-              {
-                text: "Input area expands with bounce",
-                x: 760,
-                y: 760,
-                accent: true,
-                delay: 62,
-              },
-            ]}
-            x={0}
-          />
-        </AbsoluteFill>
+        </div>
       </Sequence>
 
-      <Sequence from={120} durationInFrames={100}>
-        <SceneCard
-          frame={frame - 120}
-          shot="controls"
-          label="02 / SETUP"
-          title="Step 2"
-          description="Choose service, language, and page options"
-          bubbles={[
-            {
-              text: "Pick service stack",
-              x: 700,
-              y: 290,
-              accent: false,
-              delay: 130,
-            },
-            {
-              text: "Set source and target languages",
-              x: 1160,
-              y: 320,
-              accent: true,
-              delay: 152,
-            },
-            {
-              text: "Use page range when needed",
-              x: 1180,
-              y: 710,
-              accent: false,
-              delay: 178,
-            },
-          ]}
-          x={-30}
+      <Sequence from={120} durationInFrames={140}>
+        <Kicker text="01. 파싱 백테스트" frame={frame - 120} delay={120} />
+        <UiFrame frame={frame - 120} delay={132} />
+        <GlassPanel top={156} left={110} width={460} frame={frame - 120} delay={150}>
+          <div style={{ color: palette.ink }}>
+            <div
+              style={{
+                fontSize: 16,
+                color: palette.accentStrong,
+                fontWeight: 800,
+                letterSpacing: 1.4,
+              }}
+            >
+              목표: 파싱 가시성
+            </div>
+            <div style={{ marginTop: 6, fontSize: 42, fontWeight: 800, color: "#0f1c35" }}>
+              Backtest
+            </div>
+            <div style={{ marginTop: 8, fontSize: 21, color: "#274067", lineHeight: 1.4 }}>
+              같은 PDF에서 여러 설정으로 돌린 파싱 속도와 처리율을 비교합니다.
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                borderRadius: 12,
+                padding: "10px 14px",
+                fontSize: 20,
+                fontWeight: 700,
+                color: palette.success,
+                background: "rgba(45,212,191,0.1)",
+                display: "inline-block",
+              }}
+            >
+              베스트: {bestParseSeconds.toFixed(1)}초
+              <br />
+              (PDF2ZH legacy quickmt 기준)
+            </div>
+          </div>
+        </GlassPanel>
+      </Sequence>
+
+      <Sequence from={260} durationInFrames={130}>
+        <Kicker text="파싱 로그 기반 비교" frame={frame - 260} delay={260} />
+        <UiFrame frame={frame - 260} delay={262} />
+
+        <GlassPanel top={176} left={96} width={640} frame={frame - 260} delay={274}>
+          <div style={{ color: palette.ink }}>
+            <div style={{ fontSize: 44, fontWeight: 800, color: "#0f1f3a" }}>파싱 메트릭</div>
+            <div style={{ marginTop: 10, marginBottom: 18, color: palette.ink, fontSize: 18 }}>
+              비교 대상: PDF2ZH legacy 2종 vs pretext 3회
+            </div>
+            {parseData.map((item, index) => (
+              <MetricBar
+                key={item.run}
+                title={item.run}
+                value={item.parseSeconds}
+                max={maxParseSeconds}
+                tone={item.speedClass}
+                rank={`${item.parseSeconds.toFixed(1)}초 / ${item.pages}페이지`}
+                frame={frame - 260}
+                delay={282 + index * 15}
+                detail={`${item.note} / 페이지당 ${(item.parseSeconds / item.pages).toFixed(2)}초`}
+              />
+            ))}
+          </div>
+        </GlassPanel>
+
+        <GlassPanel top={186} left={1068} width={300} frame={frame - 260} delay={325} zIndex={2}>
+          <div style={{ color: palette.ink, fontWeight: 700, lineHeight: 1.45 }}>
+            <div style={{ fontSize: 18, color: palette.muted }}>요약</div>
+            <div style={{ marginTop: 8, fontSize: 24 }}>legacy avg {avgLegacyParse.toFixed(1)}초</div>
+            <div style={{ marginTop: 10, fontSize: 24 }}>pretext avg {avgPretextParse.toFixed(1)}초</div>
+            <div
+              style={{
+                marginTop: 14,
+                fontSize: 22,
+                color: palette.success,
+                padding: "10px 12px",
+                background: "rgba(45, 212, 191, 0.14)",
+                borderRadius: 11,
+              }}
+            >
+              파싱이 빠른 경로 우선
+            </div>
+          </div>
+        </GlassPanel>
+      </Sequence>
+
+      <Sequence from={390} durationInFrames={90}>
+        <Kicker text="02. Gradio 조작" frame={frame - 390} delay={390} />
+        <UiFrame frame={frame - 390} delay={398} />
+        <FloatingBubble
+          frame={frame - 390}
+          bubble={{ start: 408, x: 108, y: 248, text: "PDF 업로드", align: "left" }}
+        />
+        <FloatingBubble
+          frame={frame - 390}
+          bubble={{
+            start: 432,
+            x: 108,
+            y: 360,
+            text: "서비스/언어 옵션",
+            align: "left",
+          }}
+        />
+        <FloatingBubble
+          frame={frame - 390}
+          bubble={{ start: 456, x: 108, y: 482, text: "페이지 범위", align: "left" }}
         />
       </Sequence>
 
-      <Sequence from={220} durationInFrames={110}>
-        <AbsoluteFill>
-          <div
-            style={{
-              position: "absolute",
-              left: 48,
-              top: 48,
-              right: 48,
-              height: 980,
-              borderRadius: 28,
-              overflow: "hidden",
-              background: "rgba(255, 255, 255, 0.94)",
-              boxShadow: "0 38px 110px rgba(14, 17, 29, 0.2)",
-            }}
-          >
-            <Img
-              src={assets.ui}
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-          </div>
-
-          <div
-            style={{
-              position: "absolute",
-              left: 760,
-              top: 220,
-              fontSize: 52,
-              fontWeight: 900,
-              color: "#0f1833",
-              textShadow: "0 10px 24px rgba(255,255,255,0.7)",
-            }}
-          >
-            Hit <span style={{ color: palette.accent }}>Translate</span>
-            <br />
-            to start processing
-          </div>
-
-          <Bubble
-            frame={frame - 220}
-            start={226}
-            text="Tap Translate"
-            x={560}
-            y={760}
-            accent
-          />
-          <Bubble
-            frame={frame - 220}
-            start={246}
-            text="Progress appears immediately below"
-            x={980}
-            y={850}
-          />
-
-          <div
-            style={{
-              position: "absolute",
-              left: 620,
-              top: 760,
-              width: 680,
-              height: 6,
-              background: "linear-gradient(90deg, #4f63ff, #ffd66d)",
-              boxShadow: "0 0 18px rgba(79, 99, 255, 0.35)",
-              transform: `scaleX(${sceneReveal(frame - 220, 258, 20)})`,
-              transformOrigin: "left center",
-              borderRadius: 3,
-            }}
-          />
-        </AbsoluteFill>
+      <Sequence from={480} durationInFrames={90}>
+        <Kicker text="03. 번역 실행" frame={frame - 480} delay={480} />
+        <UiFrame frame={frame - 480} delay={486} />
+        <FloatingBubble
+          frame={frame - 480}
+          bubble={{ start: 496, x: 118, y: 760, text: "Run/Translate", align: "left" }}
+        />
+        <FloatingBubble
+          frame={frame - 480}
+          bubble={{
+            start: 514,
+            x: 116,
+            y: 840,
+            text: "진행 로그: 파싱 → 번역 → 렌더",
+            align: "left",
+          }}
+        />
       </Sequence>
 
-      <Sequence from={330} durationInFrames={120}>
-        <AbsoluteFill>
-          <div
-            style={{
-              position: "absolute",
-              inset: 52,
-              borderRadius: 28,
-              overflow: "hidden",
-              background: "rgba(255,255,255,0.95)",
-              boxShadow: "0 34px 120px rgba(10, 16, 28, 0.18)",
-            }}
-          >
-            <Img
-              src={assets.ui}
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-                opacity: interpolate(sceneReveal(frame - 330, 0, 20), [0, 1], [0.94, 1]),
-              }}
-            />
-            <div
-              style={{
-                position: "absolute",
-                left: 980,
-                top: 154,
-                width: 390,
-                height: 780,
-                background: "rgba(255,255,255,0.93)",
-                borderRadius: 16,
-                overflow: "hidden",
-                border: `4px solid ${palette.accent}`,
-                boxShadow: "0 20px 40px rgba(20, 32, 58, 0.2)",
-              }}
-            >
-              <Img
-                src={assets.translated}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  transform: `scale(${1 + sceneReveal(frame - 330, 8, 28) * 0.045})`,
-                  transformOrigin: "center center",
-                }}
-              />
-            </div>
+      <Sequence from={570} durationInFrames={90}>
+        <Kicker text="04. 결과 확인 후 다운로드" frame={frame - 570} delay={570} />
+        <UiFrame frame={frame - 570} delay={576} />
+        <FloatingBubble
+          frame={frame - 570}
+          bubble={{ start: 590, x: 112, y: 276, text: "번역 미리보기", align: "left" }}
+        />
+        <FloatingBubble
+          frame={frame - 570}
+          bubble={{ start: 610, x: 112, y: 830, text: "파일 다운로드", align: "left" }}
+        />
+        <GlassPanel top={690} left={1040} width={320} frame={frame - 570} delay={620} zIndex={3}>
+          <div style={{ color: palette.ink, fontWeight: 700, lineHeight: 1.35, fontSize: 22 }}>
+            핵심 정리
+            <div style={{ marginTop: 10, color: palette.accentStrong }}>파싱 단계는 먼저 확인.</div>
+            <div style={{ marginTop: 4 }}>조작은 업로드 → 설정 → 실행 → 다운로드.</div>
           </div>
-
-          <div
-            style={{
-              position: "absolute",
-              left: 72,
-              top: 180,
-              color: "#18294a",
-              fontSize: 58,
-              fontWeight: 900,
-              textShadow: "0 4px 14px rgba(255,255,255,0.55)",
-            }}
-          >
-            Review translated preview, then download
-          </div>
-          <div
-            style={{
-              position: "absolute",
-              left: 72,
-              top: 255,
-              fontSize: 30,
-              color: "#36466a",
-              fontWeight: 700,
-              maxWidth: 760,
-            }}
-          >
-            Inspect page-by-page changes in the result viewer.
-          </div>
-
-          <Bubble
-            frame={frame - 330}
-            start={346}
-            text="Check translated page"
-            x={760}
-            y={260}
-            accent
-          />
-          <Bubble
-            frame={frame - 330}
-            start={372}
-            text="Use arrows to move pages"
-            x={760}
-            y={730}
-          />
-          <Bubble
-            frame={frame - 330}
-            start={400}
-            text="Download generated files"
-            x={760}
-            y={915}
-            accent
-          />
-        </AbsoluteFill>
+        </GlassPanel>
       </Sequence>
     </AbsoluteFill>
   );

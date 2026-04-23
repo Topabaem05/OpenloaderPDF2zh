@@ -1,7 +1,9 @@
 # OpenPDF2ZH Workbench
 
+파싱 백테스트(legacy quickmt vs pretext) 기반으로, Gradio UI 조작 우선순위를 보여주는 1920×1080 가이드 영상입니다.
+
 <p align="center">
-  <strong>Gradio 사용법: 통통 튀는 Remotion 애니메이션 가이드</strong>
+  <strong>Gradio 사용법: 파싱 속도 우선 + UI 조작 안내 (Apple 스타일 모션)</strong>
 </p>
 
 <p align="center">

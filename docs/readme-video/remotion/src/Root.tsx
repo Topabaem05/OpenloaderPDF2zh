@@ -8,7 +8,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="OpenPdf2ZhUsageGuide"
         component={MyComposition}
-        durationInFrames={450}
+        durationInFrames={660}
         fps={30}
         width={1920}
         height={1080}
