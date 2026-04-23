@@ -1,6 +1,10 @@
 # OpenPDF2ZH Workbench
 
 <p align="center">
+  <strong>Gradio 사용법: 통통 튀는 Remotion 애니메이션 가이드</strong>
+</p>
+
+<p align="center">
   <a href="docs/readme-video/openpdf2zh-usage-guide.mp4">
     <img src="docs/readme-video/openpdf2zh-usage-guide-preview.gif" alt="OpenPDF2ZH app usage guide video preview" width="960" />
   </a>
