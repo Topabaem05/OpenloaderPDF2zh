@@ -9,4 +9,4 @@ aptPkgs = ["...", "openjdk-17-jre-headless", "nodejs", "npm"]
 cmds = ["bash deploy/railway/build.sh"]
 
 [start]
-cmd = "python app.py"
+cmd = "python -m openpdf2zh"

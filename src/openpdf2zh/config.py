@@ -24,7 +24,7 @@ def normalize_provider(value: str | None) -> str:
 
 
 def _default_ctranslate2_model_dir() -> str:
-    return str(Path(__file__).resolve().parents[2] / "models")
+    return str(Path(__file__).resolve().parents[2] / "resources" / "models" / "quickmt")
 
 
 def _is_lfs_pointer(path: Path) -> bool:

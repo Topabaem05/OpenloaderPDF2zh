@@ -1,2 +1,2 @@
-models/quickmt-ko-en/model.bin filter=lfs diff=lfs merge=lfs -text
-models/quickmt-en-ko/model.bin filter=lfs diff=lfs merge=lfs -text
+resources/models/quickmt/quickmt-ko-en/model.bin filter=lfs diff=lfs merge=lfs -text
+resources/models/quickmt/quickmt-en-ko/model.bin filter=lfs diff=lfs merge=lfs -text

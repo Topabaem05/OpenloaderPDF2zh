@@ -23,7 +23,7 @@ This 1920x1080 guide video focuses on fast parsing and the Gradio UI flow, based
 Run the app with one command:
 
 ```bash
-make up
+docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
 If you want to override provider or model settings before booting, copy the example environment file first:
@@ -32,19 +32,11 @@ If you want to override provider or model settings before booting, copy the exam
 cp .env.example .env
 ```
 
-## Raw Docker Command
-
-`make up` wraps the standard Docker Compose command:
-
-```bash
-docker compose up --build
-```
-
 Useful helpers:
 
 ```bash
-make logs
-make down
+docker compose -f deploy/docker/docker-compose.yml logs -f
+docker compose -f deploy/docker/docker-compose.yml down
 ```
 
 ## Open the App
@@ -57,12 +49,11 @@ Uploads and generated files persist in `./workspace`.
 ## Minimal Configuration
 
 - Docker injects `OPENPDF2ZH_HOST=0.0.0.0`, `OPENPDF2ZH_PORT=7860`, and `OPENPDF2ZH_WORKSPACE_ROOT=/app/workspace`.
-- The default Docker setup mounts `${OPENPDF2ZH_HOST_MODEL_DIR:-./models}` to `/app/models`, so the bundled `quickmt-ko-en/` and `quickmt-en-ko/` directories work without extra steps.
-- To use a different local CTranslate2 directory, set `OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models` in `.env` before `make up`.
+- The default Docker setup mounts `${OPENPDF2ZH_HOST_MODEL_DIR:-../../resources/models/quickmt}` to `/app/resources/models/quickmt`, so the bundled `quickmt-ko-en/` and `quickmt-en-ko/` directories work without extra steps.
+- To use a different local CTranslate2 directory, set `OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models` in `.env` before starting Docker Compose.
 - To switch to OpenRouter, choose `openrouter` in the UI and enter the API key in the form when you start a translation.
 
 ## Troubleshooting
 
-- `make: command not found`: install `make` or run `docker compose up --build` directly.
 - `docker: command not found`: install Docker Desktop or Docker Engine first.
-- If CTranslate2 cannot find a model, verify that the mounted host directory contains the expected model files and is available at `/app/models` in the container.
+- If CTranslate2 cannot find a model, verify that the mounted host directory contains the expected model files and is available at `/app/resources/models/quickmt` in the container.

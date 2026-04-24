@@ -23,7 +23,7 @@ from openpdf2zh.services.usage_quota import QuotaExceededError, UsageQuotaServic
 from openpdf2zh.utils.files import start_workspace_cleanup_worker
 from openpdf2zh.utils.job_limiter import JobLimiter, QueueBusyError
 
-BMC_IMAGE_PATH = Path(__file__).resolve().parents[2] / "assets" / "buy-me-a-coffee.svg"
+BMC_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "buy-me-a-coffee.svg"
 
 CSS = """
 .app-shell {max-width: 1200px; margin: 0 auto 12px 0; text-align: left;}

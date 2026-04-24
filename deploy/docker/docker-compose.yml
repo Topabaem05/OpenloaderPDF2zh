@@ -1,9 +1,9 @@
 services:
   app:
     build:
-      context: .
-      dockerfile: Dockerfile
-    command: python app.py
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    command: python -m openpdf2zh
     environment:
       OPENPDF2ZH_HOST: "0.0.0.0"
       OPENPDF2ZH_PORT: "7860"
@@ -11,7 +11,7 @@ services:
       OPENPDF2ZH_DEFAULT_PROVIDER: "${OPENPDF2ZH_DEFAULT_PROVIDER:-}"
       OPENPDF2ZH_DEFAULT_MODEL: "${OPENPDF2ZH_DEFAULT_MODEL:-}"
       OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE: "${OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE:-Simplified Chinese}"
-      OPENPDF2ZH_CTRANSLATE2_MODEL_DIR: "${OPENPDF2ZH_CTRANSLATE2_MODEL_DIR:-/app/models}"
+      OPENPDF2ZH_CTRANSLATE2_MODEL_DIR: "${OPENPDF2ZH_CTRANSLATE2_MODEL_DIR:-/app/resources/models/quickmt}"
       OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH: "${OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH:-}"
       OPENPDF2ZH_RENDER_FONT_PATH: "${OPENPDF2ZH_RENDER_FONT_PATH:-}"
       OPENPDF2ZH_RENDER_LAYOUT_ENGINE: "${OPENPDF2ZH_RENDER_LAYOUT_ENGINE:-legacy}"
@@ -22,9 +22,9 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind
-        source: ./workspace
+        source: ../../workspace
         target: /app/workspace
       - type: bind
-        source: ${OPENPDF2ZH_HOST_MODEL_DIR:-./models}
-        target: /app/models
+        source: ${OPENPDF2ZH_HOST_MODEL_DIR:-../../resources/models/quickmt}
+        target: /app/resources/models/quickmt
         read_only: true

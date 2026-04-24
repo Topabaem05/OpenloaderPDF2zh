@@ -19,6 +19,7 @@ workspace/
 output/
 outputs/
 ctranslate2_models/
+models/
 docs/media/readme-video/remotion/build/
 docs/media/readme-video/remotion/docs/
 docs/media/readme-video/remotion/node_modules/
@@ -26,9 +27,9 @@ tools/layout/pretext-helper/node_modules/
 /dropdown-*.png
 /ui-*.png
 src/*.egg-info/
-models/*
-!models/
-!models/quickmt-ko-en/
-!models/quickmt-ko-en/**
-!models/quickmt-en-ko/
-!models/quickmt-en-ko/**
+resources/models/*
+!resources/models/quickmt/
+!resources/models/quickmt/quickmt-ko-en/
+!resources/models/quickmt/quickmt-ko-en/**
+!resources/models/quickmt/quickmt-en-ko/
+!resources/models/quickmt/quickmt-en-ko/**

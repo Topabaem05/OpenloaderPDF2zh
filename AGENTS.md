@@ -8,7 +8,7 @@ This file combines the product constraints in `agent.md` with commands and code 
 - UI: Gradio plus a React workbench under `apps/web/workbench`
 - Packaging: setuptools via `pyproject.toml`
 - Source root: `src/`
-- Entrypoint: `python app.py`
+- Entrypoint: `python -m openpdf2zh`
 - Tests: `tests/`
 - Lint: `ruff`
 ## Hard constraints
@@ -20,7 +20,7 @@ This file combines the product constraints in `agent.md` with commands and code 
 - Secrets must come from environment variables only.
 - Do not hardcode API keys.
 ## Key files
-- `app.py`: local entrypoint.
+- `src/openpdf2zh/__main__.py`: local entrypoint.
 - `src/openpdf2zh/ui.py`: Gradio layout, callbacks, launch config.
 - `src/openpdf2zh/pipeline.py`: orchestration only.
 - `src/openpdf2zh/config.py`: environment-derived settings.
@@ -41,27 +41,24 @@ pip install -e .[dev]
 ```
 Run app:
 ```bash
-python app.py
+python -m openpdf2zh
 ```
 Lint commands:
 ```bash
-python -m ruff check src
-python -m ruff check .
+python -m ruff check src tests
 ```
 Notes:
-- `python -m ruff check src` is currently clean.
-- `python -m ruff check .` currently reports `E402` in `app.py` because `sys.path` is modified before the local import.
-- There is no dedicated build script; editable install is the normal packaging workflow:
+- `python -m ruff check src tests` is the focused lint command.
+- Editable install is the normal packaging workflow:
 ```bash
 pip install -e .
 ```
 ## Verified repo facts
 - `pyproject.toml` defines setuptools package discovery under `src`.
 - Dev dependencies currently include `ruff`.
-- No `Makefile` was found.
-- No `.cursorrules` or `.cursor/rules/` files were found.
-- No `.github/copilot-instructions.md` file was found.
-- No root `AGENTS.md` existed before this file was added.
+- Docker files live under `deploy/docker/`.
+- Railway/Nixpacks files live under `deploy/railway/`.
+- Bundled QuickMT models live under `resources/models/quickmt/`.
 ## Architecture
 Intended flow:
 ```text

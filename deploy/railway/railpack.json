@@ -7,7 +7,7 @@
     }
   },
   "deploy": {
-    "startCommand": "python app.py",
+    "startCommand": "python -m openpdf2zh",
     "aptPackages": ["openjdk-17-jre-headless"]
   }
 }

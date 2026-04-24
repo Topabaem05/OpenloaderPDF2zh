@@ -303,7 +303,7 @@ const Section04 = ({frame}: {frame: number}) => (
     <TitleBlock frame={frame} title="Clear Python structure" subtitle="UI, pipeline, and services stay separated by role" y={210} />
     <FadeUp frame={frame} start={26}>
       <rect x={548} y={365} width={824} height={500} rx={38} fill="#111" filter="url(#soft-3)" />
-      {["app.py", "src/openpdf2zh/ui.py", "src/openpdf2zh/pipeline.py", "services/parser_service.py", "services/render_service.py"].map((item, i) => (
+      {["src/openpdf2zh/__main__.py", "src/openpdf2zh/ui.py", "src/openpdf2zh/pipeline.py", "services/parser_service.py", "services/render_service.py"].map((item, i) => (
         <text key={item} x={620} y={455 + i * 72} fontSize={34} fontWeight={650} fill={i === 3 ? "#7ab8ff" : "#f5f5f7"}>
           {item}
         </text>

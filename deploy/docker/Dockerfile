@@ -10,9 +10,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml requirements.txt README.md app.py ./
+COPY pyproject.toml requirements.txt README.md ./
 COPY .env.example ./
-COPY assets ./assets
 COPY src ./src
 
 RUN pip install --upgrade pip \
@@ -20,4 +19,4 @@ RUN pip install --upgrade pip \
 
 EXPOSE 7860
 
-CMD ["python", "app.py"]
+CMD ["python", "-m", "openpdf2zh"]

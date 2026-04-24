@@ -18,5 +18,6 @@ frontend/
 apps/web/workbench/node_modules/
 apps/web/workbench/dist/
 models/
+resources/models/
 tests/
 *.png

@@ -78,7 +78,8 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     load_dotenv(repo_root / ".env")
     target_root = Path(
-        os.getenv("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR") or repo_root / "models"
+        os.getenv("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR")
+        or repo_root / "resources" / "models" / "quickmt"
     ).expanduser()
 
     if has_real_models(target_root):
