@@ -1,100 +1,25 @@
-from __future__ import annotations
-
-import os
-import shutil
 from pathlib import Path
-
-from huggingface_hub import snapshot_download
+import sys
 
 from dotenv import load_dotenv
 
-MODEL_DIRS = ("quickmt-ko-en", "quickmt-en-ko")
-DEFAULT_HF_MODELS = {
-    "quickmt-ko-en": {
-        "repo_id": "quickmt/quickmt-ko-en",
-        "revision": "33b35a7afa91037ccf8c607c9e6e26e3e10ddcdd",
-    },
-    "quickmt-en-ko": {
-        "repo_id": "quickmt/quickmt-en-ko",
-        "revision": "08e130e4f742c4442377983c66294d57bebe0cc7",
-    },
-}
-MODEL_FILES = (
-    "config.json",
-    "model.bin",
-    "source_vocabulary.json",
-    "src.spm.model",
-    "target_vocabulary.json",
-    "tgt.spm.model",
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from openpdf2zh.model_assets import (  # noqa: E402
+    default_model_root,
+    materialize_quickmt_models,
 )
 
 
-def is_lfs_pointer(path: Path) -> bool:
-    if not path.is_file():
-        return False
-    with path.open("rb") as handle:
-        return handle.readline().startswith(
-            b"version https://git-lfs.github.com/spec/v1"
-        )
-
-
-def has_real_models(root: Path) -> bool:
-    return all(
-        (root / model_dir / "model.bin").is_file()
-        and not is_lfs_pointer(root / model_dir / "model.bin")
-        and (root / model_dir / "model.bin").stat().st_size > 1_000_000
-        and (root / model_dir / "src.spm.model").is_file()
-        and (root / model_dir / "tgt.spm.model").is_file()
-        for model_dir in MODEL_DIRS
-    )
-
-
-def materialize_from_hugging_face(target_root: Path) -> None:
-    token = os.getenv("OPENPDF2ZH_QUICKMT_HF_TOKEN") or os.getenv("HF_TOKEN")
-    target_root.mkdir(parents=True, exist_ok=True)
-
-    for model_dir, defaults in DEFAULT_HF_MODELS.items():
-        repo_id = os.getenv(
-            f"OPENPDF2ZH_{model_dir.upper().replace('-', '_')}_HF_REPO_ID",
-            defaults["repo_id"],
-        ).strip()
-        revision = os.getenv(
-            f"OPENPDF2ZH_{model_dir.upper().replace('-', '_')}_HF_REVISION",
-            defaults["revision"],
-        ).strip()
-        local_dir = target_root / model_dir
-        if local_dir.exists():
-            shutil.rmtree(local_dir)
-        snapshot_download(
-            repo_id=repo_id,
-            revision=revision,
-            token=token,
-            local_dir=str(local_dir),
-            allow_patterns=list(MODEL_FILES),
-        )
-
-
 def main() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    load_dotenv(repo_root / ".env")
-    target_root = Path(
-        os.getenv("OPENPDF2ZH_CTRANSLATE2_MODEL_DIR")
-        or repo_root / "resources" / "models" / "quickmt"
-    ).expanduser()
+    load_dotenv(REPO_ROOT / ".env")
+    target_root = default_model_root(REPO_ROOT)
+    result = materialize_quickmt_models(target_root)
 
-    if has_real_models(target_root):
-        print(f"quickmt models already materialized in {target_root}")
-        return
-
-    materialize_from_hugging_face(target_root)
-
-    if not has_real_models(target_root):
-        raise RuntimeError(
-            f"Failed to materialize quickmt models into {target_root} from Hugging Face. "
-            "Check the configured Hugging Face repo IDs, revisions, and HF token if the model repository is private or gated."
-        )
-
-    print(f"quickmt models materialized in {target_root}")
+    print(f"quickmt models materialized in {result}")
 
 
 if __name__ == "__main__":

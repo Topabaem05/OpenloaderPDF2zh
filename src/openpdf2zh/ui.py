@@ -1002,10 +1002,10 @@ def _attach_security_middleware(app: FastAPI) -> None:
         return response
 
 
-def launch() -> None:
+def launch(settings: AppSettings | None = None) -> None:
     from openpdf2zh.webapp import create_app
 
-    settings = AppSettings.from_env()
+    settings = settings or AppSettings.from_env()
     start_workspace_cleanup_worker(
         settings.workspace_root,
         settings.workspace_retention_hours * 3600,
