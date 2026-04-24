@@ -1,59 +1,77 @@
 # OpenPDF2ZH Workbench
 
-This 1920x1080 guide video focuses on fast parsing and the Gradio UI flow, based on a parsing backtest: OpenPDF2ZH parsed 12 pages in about 1 second, while a PDF2zh warm run took 10.89 seconds for 1 page.
+PDF translation workbench with a Gradio UI.
 
-<p align="center">
-  <strong>OpenPDF2ZH Guide: fast parsing + Gradio UI flow (Apple-style motion)</strong>
-</p>
+## Install
 
-<p align="center">
-  <a href="docs/media/readme-video/openpdf2zh-usage-guide.mp4">
-    <img src="docs/media/readme-video/openpdf2zh-usage-guide-preview.gif" alt="OpenPDF2ZH app usage guide video preview" width="960" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="docs/media/readme-video/openpdf2zh-usage-guide.mp4">Watch the app usage guide video (MP4)</a>
-</p>
-
-`openpdf2zh_gradio` runs the FastAPI backend for the PDF translation pipeline and exposes the current Gradio UI at `/gradio`. The repository also contains the React workbench under `apps/web/workbench`, but the Docker quick start below is Gradio-first and does not build the frontend.
-
-## Quick Start
-
-Run the app with one command:
-
-```bash
-docker compose -f deploy/docker/docker-compose.yml up --build
-```
-
-If you want to override provider or model settings before booting, copy the example environment file first:
+### Docker
 
 ```bash
 cp .env.example .env
+docker compose -f deploy/docker/docker-compose.yml up --build
 ```
 
-Useful helpers:
+Open the app:
+
+```text
+http://localhost:7860/gradio
+```
+
+Stop the app:
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml logs -f
 docker compose -f deploy/docker/docker-compose.yml down
 ```
 
-## Open the App
+View logs:
 
-- Gradio UI: <http://localhost:7860/gradio>
-- Root route: <http://localhost:7860/> is not the Docker quick-start UI
+```bash
+docker compose -f deploy/docker/docker-compose.yml logs -f
+```
 
-Uploads and generated files persist in `./workspace`.
+### Local Python
 
-## Minimal Configuration
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -U pip
+pip install -e .[dev]
+python -m openpdf2zh
+```
 
-- Docker injects `OPENPDF2ZH_HOST=0.0.0.0`, `OPENPDF2ZH_PORT=7860`, and `OPENPDF2ZH_WORKSPACE_ROOT=/app/workspace`.
-- The default Docker setup mounts `${OPENPDF2ZH_HOST_MODEL_DIR:-../../resources/models/quickmt}` to `/app/resources/models/quickmt`, so the bundled `quickmt-ko-en/` and `quickmt-en-ko/` directories work without extra steps.
-- To use a different local CTranslate2 directory, set `OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models` in `.env` before starting Docker Compose.
-- To switch to OpenRouter, choose `openrouter` in the UI and enter the API key in the form when you start a translation.
+Open the app:
 
-## Troubleshooting
+```text
+http://localhost:7860/gradio
+```
 
-- `docker: command not found`: install Docker Desktop or Docker Engine first.
-- If CTranslate2 cannot find a model, verify that the mounted host directory contains the expected model files and is available at `/app/resources/models/quickmt` in the container.
+## Use
+
+1. Open the Gradio UI.
+2. Upload a PDF file.
+3. Choose the translation service.
+4. Choose the target language.
+5. Click the translate button.
+6. Download the translated PDF from the result panel.
+
+## Configuration
+
+The Docker setup uses bundled QuickMT CTranslate2 models from:
+
+```text
+resources/models/quickmt
+```
+
+To use another model directory, set this in `.env`:
+
+```bash
+OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models
+```
+
+To use OpenRouter, select `openrouter` in the UI and enter the API key before starting a translation.
+
+Generated files are stored under:
+
+```text
+workspace/
+```
