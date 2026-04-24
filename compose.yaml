@@ -1,8 +1,8 @@
 services:
   app:
     build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     command: python -m openpdf2zh
     environment:
       OPENPDF2ZH_HOST: "0.0.0.0"
@@ -22,9 +22,9 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind
-        source: ../../workspace
+        source: ./workspace
         target: /app/workspace
       - type: bind
-        source: ${OPENPDF2ZH_HOST_MODEL_DIR:-../../resources/models/quickmt}
+        source: ${OPENPDF2ZH_HOST_MODEL_DIR:-./resources/models/quickmt}
         target: /app/resources/models/quickmt
         read_only: true

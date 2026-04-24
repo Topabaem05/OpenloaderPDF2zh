@@ -56,7 +56,7 @@ pip install -e .
 ## Verified repo facts
 - `pyproject.toml` defines setuptools package discovery under `src`.
 - Dev dependencies currently include `ruff`.
-- Docker files live under `deploy/docker/`.
+- Docker files live at `Dockerfile` and `compose.yaml`.
 - Railway/Nixpacks files live under `deploy/railway/`.
 - Bundled QuickMT models live under `resources/models/quickmt/`.
 ## Architecture

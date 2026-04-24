@@ -45,7 +45,7 @@ python -m openpdf2zh serve
 
 ```bash
 cp .env.example .env
-docker compose -f deploy/docker/docker-compose.yml up --build
+docker compose up --build
 ```
 
 Open Gradio:
@@ -57,7 +57,22 @@ http://localhost:7860/gradio
 Stop Docker:
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml down
+docker compose down
+```
+
+Build only:
+
+```bash
+docker build -t openpdf2zh-gradio .
+```
+
+Run the built image directly:
+
+```bash
+docker run --rm -p 7860:7860 \
+  -v "$PWD/workspace:/app/workspace" \
+  -v "$PWD/resources/models/quickmt:/app/resources/models/quickmt:ro" \
+  openpdf2zh-gradio
 ```
 
 ## CLI Usage

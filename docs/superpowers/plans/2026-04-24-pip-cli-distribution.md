@@ -763,7 +763,7 @@ def test_readme_documents_installation_paths_and_cli_examples() -> None:
         "pip install openpdf2zh-gradio",
         "pipx install openpdf2zh-gradio",
         "pip install -e .[dev]",
-        "docker compose -f deploy/docker/docker-compose.yml up --build",
+        "docker compose up --build",
         "openpdf2zh serve",
         "openpdf2zh-gradio",
         "openpdf2zh translate sample.pdf --target-language Korean --output-dir out",
@@ -837,7 +837,7 @@ python -m openpdf2zh serve
 
 ```bash
 cp .env.example .env
-docker compose -f deploy/docker/docker-compose.yml up --build
+docker compose up --build
 ```
 
 Open Gradio:
@@ -849,7 +849,7 @@ http://localhost:7860/gradio
 Stop Docker:
 
 ```bash
-docker compose -f deploy/docker/docker-compose.yml down
+docker compose down
 ```
 
 ## CLI Usage
