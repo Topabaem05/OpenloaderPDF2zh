@@ -1,6 +1,6 @@
 import "./index.css";
 import { Composition } from "remotion";
-import { MyComposition } from "./Composition";
+import { MyComposition, TOTAL_FRAMES } from "./Composition";
 
 export const RemotionRoot: React.FC = () => {
   return (
@@ -8,7 +8,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="OpenPdf2ZhUsageGuide"
         component={MyComposition}
-        durationInFrames={660}
+        durationInFrames={TOTAL_FRAMES}
         fps={30}
         width={1920}
         height={1080}

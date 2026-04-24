@@ -1,580 +1,452 @@
+import React from "react";
 import {
   AbsoluteFill,
-  Img,
   Sequence,
   interpolate,
-  staticFile,
   spring,
   useCurrentFrame,
+  useVideoConfig,
 } from "remotion";
-import React from "react";
 
-type ParseMetric = {
-  run: string;
-  parseSeconds: number;
-  pages: number;
-  source: "legacy" | "pretext" | "mixed";
-  note: string;
-  speedClass: "fast" | "neutral" | "slow";
-};
+const W = 1920;
+const H = 1080;
+const FRAME_RATE = 30;
 
-type Bubble = {
-  start: number;
-  text: string;
-  x: number;
-  y: number;
-  align: "left" | "right";
-};
-
-const assets = {
-  ui: staticFile("openpdf2zh-ui-current.png"),
-};
-
-const palette = {
-  backgroundStart: "#000212",
-  backgroundEnd: "#070c21",
-  card: "rgba(255, 255, 255, 0.94)",
-  cardBorder: "rgba(255, 255, 255, 0.18)",
-  text: "#f5f7ff",
-  ink: "#17253f",
-  muted: "#a3b1c8",
-  accent: "#3d82ff",
-  accentStrong: "#0f5ce0",
-  success: "#2dd4bf",
-  warn: "#ffd166",
-};
-
-const parseData: ParseMetric[] = [
-  {
-    run: "legacy quickmt",
-    parseSeconds: 1,
-    pages: 12,
-    source: "legacy",
-    note: "PDF2ZH 기본 모드",
-    speedClass: "fast",
-  },
-  {
-    run: "legacy nllb",
-    parseSeconds: 2,
-    pages: 12,
-    source: "legacy",
-    note: "번역기 전환 테스트",
-    speedClass: "neutral",
-  },
-  {
-    run: "pretext v1",
-    parseSeconds: 5,
-    pages: 7,
-    source: "pretext",
-    note: "백테스트 재실행",
-    speedClass: "slow",
-  },
-  {
-    run: "pretext v2",
-    parseSeconds: 5,
-    pages: 7,
-    source: "pretext",
-    note: "렌더 파이프라인 안정화",
-    speedClass: "slow",
-  },
-  {
-    run: "pretext v3",
-    parseSeconds: 6,
-    pages: 7,
-    source: "pretext",
-    note: "확장 실험",
-    speedClass: "slow",
-  },
+const sections = [
+  {id: "01", title: "OpenPDF2ZH Workbench", subtitle: "PDF 번역과 레이아웃 복원을 하나의 워크벤치로"},
+  {id: "02", title: "Parsing Backtest", subtitle: "PDF2zh 대비 빠르게 끝나는 첫 단계"},
+  {id: "03", title: "Pipeline", subtitle: "업로드부터 결과 PDF까지 한 흐름으로"},
+  {id: "04", title: "Project Structure", subtitle: "Gradio와 FastAPI를 잇는 Python 중심 구조"},
+  {id: "05", title: "Quick Start", subtitle: "Docker로 바로 실행"},
+  {id: "06", title: "Gradio UI", subtitle: "업로드, 설정, 실행, 다운로드만 보여주기"},
+  {id: "07", title: "Strengths", subtitle: "MVP에서 바로 보이는 장점"},
+  {id: "08", title: "Next Steps", subtitle: "README, 샘플 결과, 벤치마크 확장"},
+  {id: "09", title: "Wrap Up", subtitle: "clone, run, translate"},
 ];
 
-const legacyRuns = parseData.filter((item) => item.source !== "pretext");
-const pretextRuns = parseData.filter((item) => item.source === "pretext");
+const sectionDurations = [126, 144, 126, 114, 114, 168, 114, 108, 96];
 
-const maxParseSeconds = Math.max(...parseData.map((item) => item.parseSeconds));
-const bestParseSeconds = Math.min(...parseData.map((item) => item.parseSeconds));
-const avgLegacyParse =
-  legacyRuns.reduce((sum, item) => sum + item.parseSeconds, 0) / legacyRuns.length;
-const avgPretextParse =
-  pretextRuns.reduce((sum, item) => sum + item.parseSeconds, 0) / pretextRuns.length;
+const sumBefore = (index: number) =>
+  sectionDurations.slice(0, index).reduce((total, duration) => total + duration, 0);
 
-const clamp = (value: number, min: number, max: number) =>
-  Math.max(min, Math.min(max, value));
+const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value));
 
-const springIn = (frame: number, startFrame: number): number =>
-  spring({
-    frame: frame - startFrame,
-    fps: 30,
-    config: {
-      damping: 12,
-      mass: 0.75,
-      stiffness: 110,
-      overshootClamping: false,
-    },
-    from: 0,
-    to: 1,
+const ease = (frame: number, start: number, duration = 24) =>
+  interpolate(clamp((frame - start) / duration), [0, 1], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
   });
 
-const reveal = (frame: number, start: number, duration: number): number =>
-  interpolate(
-    clamp((frame - start) / duration, 0, 1),
-    [0, 1],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    },
-  );
+const s = (frame: number, start: number, damping = 18) =>
+  spring({
+    frame: Math.max(0, frame - start),
+    fps: FRAME_RATE,
+    config: {damping, stiffness: 92, mass: 0.75},
+  });
 
-const GlassPanel: React.FC<{
-  children: React.ReactNode;
-  top: number;
-  left: number;
-  width: number;
-  height?: number;
+const FadeUp = ({
+  frame,
+  start,
+  children,
+  y = 34,
+  scale = 0.98,
+}: {
   frame: number;
-  delay: number;
-  zIndex?: number;
-}> = ({ children, top, left, width, height, frame, delay, zIndex = 1 }) => {
-  const inValue = springIn(frame, delay);
-
+  start: number;
+  children: React.ReactNode;
+  y?: number;
+  scale?: number;
+}) => {
+  const p = clamp(s(frame, start));
   return (
-    <div
-      style={{
-        position: "absolute",
-        top,
-        left,
-        width,
-        height: height ?? "auto",
-        padding: "24px",
-        borderRadius: 26,
-        background: palette.card,
-        border: `1px solid ${palette.cardBorder}`,
-        boxShadow: "0 22px 64px rgba(5, 8, 25, 0.45)",
-        transform: `translateY(${interpolate(inValue, [0, 0.8, 1], [14, 0, 0])}px) scale(${interpolate(
-          inValue,
-          [0, 1],
-          [0.99, 1],
-        )})`,
-        opacity: inValue,
-        zIndex,
-      }}
+    <g
+      opacity={p}
+      transform={`translate(0 ${interpolate(p, [0, 1], [y, 0])}) scale(${interpolate(p, [0, 1], [scale, 1])})`}
     >
       {children}
-    </div>
+    </g>
   );
 };
 
-const Kicker = ({ text, frame, delay }: { text: string; frame: number; delay: number }) => {
-  const revealValue = reveal(frame, delay, 12);
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 34,
-        left: 52,
-        zIndex: 10,
-        color: "rgba(255,255,255,0.78)",
-        letterSpacing: 2,
-        fontSize: 18,
-        fontWeight: 600,
-        textTransform: "uppercase",
-        opacity: revealValue,
-      }}
-    >
-      {text}
-    </div>
-  );
-};
-
-const H1 = ({ children }: { children: React.ReactNode }) => (
-  <div
-    style={{
-      fontSize: 56,
-      color: palette.text,
-      letterSpacing: -1.2,
-      fontWeight: 800,
-      lineHeight: 1.04,
-    }}
-  >
-    {children}
-  </div>
-);
-
-const Paragraph = ({
+const Shell = ({
+  frame,
+  index,
   children,
-  small = false,
 }: {
-  children: React.ReactNode;
-  small?: boolean;
-}) => (
-  <div
-    style={{
-      marginTop: 14,
-      color: "rgba(255,255,255,0.84)",
-      fontSize: small ? 28 : 32,
-      fontWeight: small ? 500 : 600,
-      lineHeight: 1.4,
-    }}
-  >
-    {children}
-  </div>
-);
-
-const MetricBar: React.FC<{
-  title: string;
-  value: number;
-  max: number;
-  tone: "fast" | "neutral" | "slow";
-  rank: string;
   frame: number;
-  delay: number;
-  detail: string;
-}> = ({ title, value, max, tone, rank, frame, delay, detail }) => {
-  const grow = springIn(frame, delay);
-  const ratio = (value / max) * 100;
-  const barColor =
-    tone === "fast"
-      ? palette.success
-      : tone === "neutral"
-        ? palette.warn
-        : "#ef4444";
-
+  index: number;
+  children: React.ReactNode;
+}) => {
+  const meta = sections[index];
+  const shell = clamp(s(frame, 0, 22));
   return (
-    <div
-      style={{
-        marginBottom: 16,
-        opacity: reveal(frame, delay, 10),
-        transform: `translateX(${interpolate(grow, [0, 1], [18, 0])}px)`,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          color: "#0f1933",
-          fontWeight: 700,
-          fontSize: 24,
-        }}
-      >
-        <span>{title}</span>
-        <span style={{ color: palette.muted }}>{rank}</span>
-      </div>
-      <div
-        style={{
-          marginTop: 8,
-          height: 14,
-          borderRadius: 999,
-          background: "rgba(15, 25, 45, 0.12)",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            height: "100%",
-            width: `${ratio}%`,
-            background: barColor,
-            boxShadow: `0 0 10px ${barColor}`,
-            borderRadius: 999,
-          }}
-        />
-      </div>
-      <div style={{ marginTop: 6, color: palette.ink, fontWeight: 600, fontSize: 18 }}>{detail}</div>
-    </div>
-  );
-};
-
-const UiFrame = ({ frame, delay }: { frame: number; delay: number }) => {
-  const float = interpolate(springIn(frame, delay), [0, 1], [6, 0]);
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: "50%",
-        top: 54,
-        width: 1140,
-        height: 1018,
-        boxSizing: "border-box",
-        transform: `translate(-50%, ${float}px)`,
-        borderRadius: 28,
-        padding: 14,
-        background: "rgba(255,255,255,0.96)",
-        boxShadow: "0 35px 95px rgba(3, 6, 20, 0.55)",
-        border: `1px solid ${palette.cardBorder}`,
-        overflow: "hidden",
-      }}
-    >
-      <Img
-        src={assets.ui}
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-          objectPosition: "top center",
-          borderRadius: 20,
-        }}
-      />
-    </div>
-  );
-};
-
-const FloatingBubble = ({ frame, bubble }: { frame: number; bubble: Bubble }) => {
-  const progress = springIn(frame, bubble.start);
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: bubble.x,
-        top: bubble.y,
-        padding: "12px 18px",
-        borderRadius: 16,
-        fontSize: 24,
-        fontWeight: 700,
-        color: bubble.align === "left" ? palette.text : "#15203a",
-        background:
-          bubble.align === "left" ? "rgba(13, 27, 52, 0.92)" : "rgba(255,255,255,0.96)",
-        border: `1px solid ${palette.cardBorder}`,
-        boxShadow: "0 14px 34px rgba(6,10,20,0.25)",
-        opacity: reveal(frame, bubble.start - 2, 10),
-        transform: `translateY(${interpolate(progress, [0, 1], [10, 0])}px)`,
-        zIndex: 4,
-      }}
-    >
-      {bubble.text}
-    </div>
-  );
-};
-
-export const MyComposition = () => {
-  const frame = useCurrentFrame();
-  const introProgress = reveal(frame, 0, 18);
-
-  return (
-    <AbsoluteFill
-      style={{
-        background: `linear-gradient(155deg, ${palette.backgroundStart} 0%, ${palette.backgroundEnd} 58%, #060f24 100%)`,
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          backgroundImage:
-            "radial-gradient(circle at 14% 16%, rgba(61,130,255,0.16) 0, transparent 430px), radial-gradient(circle at 88% 86%, rgba(45,212,191,0.18) 0, transparent 380px)",
-        }}
-      />
-
-      <Sequence from={0} durationInFrames={120}>
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            opacity: introProgress,
-            transform: `translateY(${interpolate(introProgress, [0, 1], [12, 0])}px)`,
-            textAlign: "left",
-            paddingLeft: 72,
-          }}
-        >
-          <div style={{ width: 1120 }}>
-            <div
-              style={{
-                display: "inline-block",
-                padding: "12px 16px",
-                borderRadius: 999,
-                background: "rgba(13, 27, 52, 0.7)",
-                border: "1px solid rgba(255,255,255,0.16)",
-                color: "#cfe0ff",
-                fontSize: 20,
-                fontWeight: 700,
-                letterSpacing: 1,
-              }}
-            >
-              Gradio-first walkthrough
-            </div>
-            <H1>파싱 속도로 시작되는 UX</H1>
-            <Paragraph>PDF 업로드 다음, 가장 먼저 확인해야 하는 건 번역 품질보다 파싱 속도입니다.</Paragraph>
-            <Paragraph small={false}>백테스트 로그를 바탕으로 한 그레이스풀한 파싱 비교</Paragraph>
-            <div
-              style={{
-                marginTop: 28,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "14px 18px",
-                borderRadius: 14,
-                background: "rgba(255,255,255,0.9)",
-                color: palette.ink,
-                fontSize: 26,
-                fontWeight: 700,
-              }}
-            >
-              <span
-                style={{
-                  display: "inline-block",
-                  width: 11,
-                  height: 11,
-                  borderRadius: 999,
-                  background: palette.success,
-                }}
-              />
-              파싱 단축이 체감 속도를 바꿉니다
-            </div>
-          </div>
-        </div>
-      </Sequence>
-
-      <Sequence from={120} durationInFrames={140}>
-        <Kicker text="01. 파싱 백테스트" frame={frame - 120} delay={120} />
-        <UiFrame frame={frame - 120} delay={132} />
-        <GlassPanel top={156} left={110} width={460} frame={frame - 120} delay={150}>
-          <div style={{ color: palette.ink }}>
-            <div
-              style={{
-                fontSize: 16,
-                color: palette.accentStrong,
-                fontWeight: 800,
-                letterSpacing: 1.4,
-              }}
-            >
-              목표: 파싱 가시성
-            </div>
-            <div style={{ marginTop: 6, fontSize: 42, fontWeight: 800, color: "#0f1c35" }}>
-              Backtest
-            </div>
-            <div style={{ marginTop: 8, fontSize: 21, color: "#274067", lineHeight: 1.4 }}>
-              같은 PDF에서 여러 설정으로 돌린 파싱 속도와 처리율을 비교합니다.
-            </div>
-            <div
-              style={{
-                marginTop: 12,
-                borderRadius: 12,
-                padding: "10px 14px",
-                fontSize: 20,
-                fontWeight: 700,
-                color: palette.success,
-                background: "rgba(45,212,191,0.1)",
-                display: "inline-block",
-              }}
-            >
-              베스트: {bestParseSeconds.toFixed(1)}초
-              <br />
-              (PDF2ZH legacy quickmt 기준)
-            </div>
-          </div>
-        </GlassPanel>
-      </Sequence>
-
-      <Sequence from={260} durationInFrames={130}>
-        <Kicker text="파싱 로그 기반 비교" frame={frame - 260} delay={260} />
-        <UiFrame frame={frame - 260} delay={262} />
-
-        <GlassPanel top={176} left={96} width={640} frame={frame - 260} delay={274}>
-          <div style={{ color: palette.ink }}>
-            <div style={{ fontSize: 44, fontWeight: 800, color: "#0f1f3a" }}>파싱 메트릭</div>
-            <div style={{ marginTop: 10, marginBottom: 18, color: palette.ink, fontSize: 18 }}>
-              비교 대상: PDF2ZH legacy 2종 vs pretext 3회
-            </div>
-            {parseData.map((item, index) => (
-              <MetricBar
-                key={item.run}
-                title={item.run}
-                value={item.parseSeconds}
-                max={maxParseSeconds}
-                tone={item.speedClass}
-                rank={`${item.parseSeconds.toFixed(1)}초 / ${item.pages}페이지`}
-                frame={frame - 260}
-                delay={282 + index * 15}
-                detail={`${item.note} / 페이지당 ${(item.parseSeconds / item.pages).toFixed(2)}초`}
+    <AbsoluteFill style={{background: "#f5f5f7"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H}>
+        <defs>
+          <linearGradient id={`bg-${index}`} x1="0" x2="1" y1="0" y2="1">
+            <stop offset="0" stopColor="#fbfbfd" />
+            <stop offset="0.52" stopColor="#f5f5f7" />
+            <stop offset="1" stopColor="#ebedf0" />
+          </linearGradient>
+          <filter id={`soft-${index}`} x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="28" stdDeviation="28" floodColor="#000" floodOpacity="0.13" />
+          </filter>
+        </defs>
+        <rect width={W} height={H} fill={`url(#bg-${index})`} />
+        <g opacity={shell}>
+          <text x={96} y={84} fontSize={25} fontWeight={700} fill="#151515">
+            {meta.id}
+          </text>
+          <text x={146} y={84} fontSize={25} fontWeight={650} fill="#151515">
+            {meta.title}
+          </text>
+          <text x={146} y={118} fontSize={17} fill="#6e6e73">
+            {meta.subtitle}
+          </text>
+          <g transform="translate(1590 72)">
+            {sections.map((item, i) => (
+              <circle
+                key={item.id}
+                cx={i * 24}
+                cy={0}
+                r={i === index ? 5.6 : 3.4}
+                fill={i === index ? "#111" : "#c7c7cc"}
               />
             ))}
-          </div>
-        </GlassPanel>
-
-        <GlassPanel top={186} left={1068} width={300} frame={frame - 260} delay={325} zIndex={2}>
-          <div style={{ color: palette.ink, fontWeight: 700, lineHeight: 1.45 }}>
-            <div style={{ fontSize: 18, color: palette.muted }}>요약</div>
-            <div style={{ marginTop: 8, fontSize: 24 }}>legacy avg {avgLegacyParse.toFixed(1)}초</div>
-            <div style={{ marginTop: 10, fontSize: 24 }}>pretext avg {avgPretextParse.toFixed(1)}초</div>
-            <div
-              style={{
-                marginTop: 14,
-                fontSize: 22,
-                color: palette.success,
-                padding: "10px 12px",
-                background: "rgba(45, 212, 191, 0.14)",
-                borderRadius: 11,
-              }}
-            >
-              파싱이 빠른 경로 우선
-            </div>
-          </div>
-        </GlassPanel>
-      </Sequence>
-
-      <Sequence from={390} durationInFrames={90}>
-        <Kicker text="02. Gradio 조작" frame={frame - 390} delay={390} />
-        <UiFrame frame={frame - 390} delay={398} />
-        <FloatingBubble
-          frame={frame - 390}
-          bubble={{ start: 408, x: 108, y: 248, text: "PDF 업로드", align: "left" }}
-        />
-        <FloatingBubble
-          frame={frame - 390}
-          bubble={{
-            start: 432,
-            x: 108,
-            y: 360,
-            text: "서비스/언어 옵션",
-            align: "left",
-          }}
-        />
-        <FloatingBubble
-          frame={frame - 390}
-          bubble={{ start: 456, x: 108, y: 482, text: "페이지 범위", align: "left" }}
-        />
-      </Sequence>
-
-      <Sequence from={480} durationInFrames={90}>
-        <Kicker text="03. 번역 실행" frame={frame - 480} delay={480} />
-        <UiFrame frame={frame - 480} delay={486} />
-        <FloatingBubble
-          frame={frame - 480}
-          bubble={{ start: 496, x: 118, y: 760, text: "Run/Translate", align: "left" }}
-        />
-        <FloatingBubble
-          frame={frame - 480}
-          bubble={{
-            start: 514,
-            x: 116,
-            y: 840,
-            text: "진행 로그: 파싱 → 번역 → 렌더",
-            align: "left",
-          }}
-        />
-      </Sequence>
-
-      <Sequence from={570} durationInFrames={90}>
-        <Kicker text="04. 결과 확인 후 다운로드" frame={frame - 570} delay={570} />
-        <UiFrame frame={frame - 570} delay={576} />
-        <FloatingBubble
-          frame={frame - 570}
-          bubble={{ start: 590, x: 112, y: 276, text: "번역 미리보기", align: "left" }}
-        />
-        <FloatingBubble
-          frame={frame - 570}
-          bubble={{ start: 610, x: 112, y: 830, text: "파일 다운로드", align: "left" }}
-        />
-        <GlassPanel top={690} left={1040} width={320} frame={frame - 570} delay={620} zIndex={3}>
-          <div style={{ color: palette.ink, fontWeight: 700, lineHeight: 1.35, fontSize: 22 }}>
-            핵심 정리
-            <div style={{ marginTop: 10, color: palette.accentStrong }}>파싱 단계는 먼저 확인.</div>
-            <div style={{ marginTop: 4 }}>조작은 업로드 → 설정 → 실행 → 다운로드.</div>
-          </div>
-        </GlassPanel>
-      </Sequence>
+          </g>
+        </g>
+        {children}
+      </svg>
     </AbsoluteFill>
   );
 };
+
+const TitleBlock = ({frame, title, subtitle, y = 245}: {frame: number; title: string; subtitle: string; y?: number}) => (
+  <FadeUp frame={frame} start={4}>
+    <text x={W / 2} y={y} textAnchor="middle" fontSize={92} fontWeight={860} fill="#050505">
+      {title}
+    </text>
+    <text x={W / 2} y={y + 70} textAnchor="middle" fontSize={30} fontWeight={520} fill="#6e6e73">
+      {subtitle}
+    </text>
+  </FadeUp>
+);
+
+const DocumentCard = ({x, y, label, color, progress = 1}: {x: number; y: number; label: string; color: string; progress?: number}) => (
+  <g transform={`translate(${x} ${y})`}>
+    <rect width={350} height={468} rx={34} fill="#fff" stroke="#dedede" filter="url(#soft-0)" />
+    <path d="M 276 0 L 350 74 L 276 74 Z" fill="#f1f1f3" stroke="#dedede" />
+    <rect x={42} y={48} width={82} height={42} rx={10} fill={color} />
+    <text x={83} y={77} textAnchor="middle" fontSize={18} fontWeight={800} fill="#fff">
+      PDF
+    </text>
+    <text x={42} y={150} fontSize={32} fontWeight={760} fill="#111">
+      {label}
+    </text>
+    {[0, 1, 2, 3].map((line) => (
+      <rect key={line} x={42} y={196 + line * 40} width={210 + line * 18} height={10} rx={5} fill="#d6d6d9" />
+    ))}
+    <rect x={42} y={392} width={266} height={18} rx={9} fill="#e8e8ed" />
+    <rect x={42} y={392} width={266 * progress} height={18} rx={9} fill={color} />
+  </g>
+);
+
+const Section01 = ({frame}: {frame: number}) => {
+  const arrow = ease(frame, 46, 40);
+  return (
+    <Shell frame={frame} index={0}>
+      <TitleBlock frame={frame} title="Workbench for PDFs" subtitle="번역보다 먼저, 파싱 대기 시간을 줄입니다" />
+      <FadeUp frame={frame} start={24}>
+        <DocumentCard x={430} y={410} label="source.pdf" color="#111" />
+      </FadeUp>
+      <g opacity={arrow} transform={`translate(${interpolate(arrow, [0, 1], [850, 908])} 622)`}>
+        <line x1={0} y1={0} x2={170} y2={0} stroke="#111" strokeWidth={6} strokeLinecap="round" />
+        <path d="M 150 -22 L 180 0 L 150 22" fill="none" stroke="#111" strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+      <FadeUp frame={frame} start={58}>
+        <DocumentCard x={1160} y={410} label="translated.pdf" color="#0071e3" progress={0.92} />
+      </FadeUp>
+      <FadeUp frame={frame} start={82}>
+        <text x={W / 2} y={915} textAnchor="middle" fontSize={44} fontWeight={820} fill="#111">
+          parse fast. keep layout. finish clean.
+        </text>
+      </FadeUp>
+    </Shell>
+  );
+};
+
+const Bar = ({x, y, width, value, color, label, time}: {x: number; y: number; width: number; value: number; color: string; label: string; time: string}) => (
+  <g>
+    <text x={x} y={y - 20} fontSize={27} fontWeight={760} fill="#111">
+      {label}
+    </text>
+    <rect x={x} y={y} width={width} height={38} rx={19} fill="#e5e5ea" />
+    <rect x={x} y={y} width={width * value} height={38} rx={19} fill={color} />
+    <text x={x + width + 28} y={y + 29} fontSize={34} fontWeight={820} fill={color}>
+      {time}
+    </text>
+  </g>
+);
+
+const Section02 = ({frame}: {frame: number}) => {
+  const open = ease(frame, 36, 36);
+  const pdf2zh = ease(frame, 58, 46);
+  const number = Math.round(interpolate(open, [0, 1], [0, 12]));
+  return (
+    <Shell frame={frame} index={1}>
+      <TitleBlock frame={frame} title="Parsing first." subtitle="백테스트 수치가 보여준 차이" y={220} />
+      <FadeUp frame={frame} start={24}>
+        <rect x={270} y={395} width={1380} height={330} rx={44} fill="#fff" filter="url(#soft-1)" />
+        <text x={350} y={475} fontSize={28} fill="#6e6e73">
+          Local parsing backtest snapshot
+        </text>
+        <text x={350} y={560} fontSize={86} fontWeight={880} fill="#111">
+          {number} pages parsed in about 1s
+        </text>
+        <text x={350} y={622} fontSize={26} fill="#6e6e73">
+          OpenPDF2ZH run log: 2026-04-11, phase=parse:start to phase=parse:done
+        </text>
+      </FadeUp>
+      <FadeUp frame={frame} start={44}>
+        <Bar x={350} y={780} width={880} value={open} color="#0071e3" label="OpenPDF2ZH parser" time="~1s / 12p" />
+        <Bar x={350} y={875} width={880} value={pdf2zh * 0.72} color="#86868b" label="PDF2zh warm run" time="10.89s / 1p" />
+      </FadeUp>
+      <FadeUp frame={frame} start={94}>
+        <text x={1390} y={870} textAnchor="middle" fontSize={54} fontWeight={860} fill="#111">
+          less waiting
+        </text>
+      </FadeUp>
+    </Shell>
+  );
+};
+
+const pipeline = ["Upload", "Parse", "Translate", "Layout", "PDF"];
+
+const Section03 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={2}>
+    <TitleBlock frame={frame} title="One continuous pipeline" subtitle="사용자는 버튼 하나로 흐름을 따라갑니다" y={225} />
+    <g transform="translate(245 575)">
+      <line x1={0} y1={0} x2={1430} y2={0} stroke="#d2d2d7" strokeWidth={10} strokeLinecap="round" />
+      {pipeline.map((item, i) => {
+        const p = clamp(s(frame, 28 + i * 13));
+        const x = i * 357;
+        return (
+          <g key={item} opacity={p} transform={`translate(${x} ${interpolate(p, [0, 1], [38, 0])})`}>
+            <circle cx={0} cy={0} r={60} fill={i === 1 ? "#0071e3" : "#fff"} stroke="#111" strokeWidth={3} />
+            <text x={0} y={13} textAnchor="middle" fontSize={38} fontWeight={820} fill={i === 1 ? "#fff" : "#111"}>
+              {i + 1}
+            </text>
+            <text x={0} y={125} textAnchor="middle" fontSize={30} fontWeight={760} fill="#111">
+              {item}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+    <FadeUp frame={frame} start={94}>
+      <text x={W / 2} y={895} textAnchor="middle" fontSize={42} fontWeight={820} fill="#111">
+        파싱이 빨라지면 전체 경험이 먼저 가벼워집니다.
+      </text>
+    </FadeUp>
+  </Shell>
+);
+
+const Section04 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={3}>
+    <TitleBlock frame={frame} title="Clear Python structure" subtitle="UI, pipeline, services가 역할별로 분리됩니다" y={210} />
+    <FadeUp frame={frame} start={26}>
+      <rect x={548} y={365} width={824} height={500} rx={38} fill="#111" filter="url(#soft-3)" />
+      {["app.py", "src/openpdf2zh/ui.py", "src/openpdf2zh/pipeline.py", "services/parser_service.py", "services/render_service.py"].map((item, i) => (
+        <text key={item} x={620} y={455 + i * 72} fontSize={34} fontWeight={650} fill={i === 3 ? "#7ab8ff" : "#f5f5f7"}>
+          {item}
+        </text>
+      ))}
+      <rect x={360} y={555} width={210} height={94} rx={28} fill="#fff" stroke="#d2d2d7" />
+      <text x={465} y={612} textAnchor="middle" fontSize={31} fontWeight={760}>
+        Gradio
+      </text>
+      <rect x={1350} y={555} width={210} height={94} rx={28} fill="#fff" stroke="#d2d2d7" />
+      <text x={1455} y={612} textAnchor="middle" fontSize={31} fontWeight={760}>
+        FastAPI
+      </text>
+    </FadeUp>
+  </Shell>
+);
+
+const Section05 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={4}>
+    <TitleBlock frame={frame} title="Run it locally" subtitle="Docker quick start" y={220} />
+    <FadeUp frame={frame} start={26}>
+      <rect x={348} y={375} width={1224} height={420} rx={38} fill="#171717" filter="url(#soft-4)" />
+      <rect x={348} y={375} width={1224} height={72} rx={38} fill="#f5f5f7" />
+      <circle cx={400} cy={411} r={10} fill="#ff5f57" />
+      <circle cx={432} cy={411} r={10} fill="#ffbd2e" />
+      <circle cx={464} cy={411} r={10} fill="#28c840" />
+      {["cp .env.example .env", "docker compose up --build", "open http://localhost:7860/gradio"].map((line, i) => {
+        const p = ease(frame, 42 + i * 16, 10);
+        return (
+          <text key={line} x={450} y={535 + i * 86} fontSize={42} fontWeight={620} fill="#f5f5f7" opacity={p}>
+            <tspan fill="#00a7ff">$ </tspan>
+            {line}
+          </text>
+        );
+      })}
+    </FadeUp>
+  </Shell>
+);
+
+const Section06 = ({frame}: {frame: number}) => {
+  const progress = interpolate(ease(frame, 96, 34), [0, 1], [0.08, 0.94]);
+  return (
+    <Shell frame={frame} index={5}>
+      <TitleBlock frame={frame} title="Gradio, only the controls" subtitle="설명 박스 없이 UI 조작만 집중" y={155} />
+      <FadeUp frame={frame} start={22}>
+        <rect x={190} y={285} width={1540} height={670} rx={42} fill="#fff" stroke="#d2d2d7" filter="url(#soft-5)" />
+        <text x={260} y={365} fontSize={34} fontWeight={820} fill="#111">
+          OpenPDF2ZH
+        </text>
+        <rect x={260} y={430} width={350} height={390} rx={26} fill="#f7f7f9" stroke="#d2d2d7" />
+        <text x={435} y={535} textAnchor="middle" fontSize={76} fontWeight={650} fill="#0071e3">
+          UP
+        </text>
+        <text x={435} y={592} textAnchor="middle" fontSize={25} fill="#6e6e73">
+          sample-benchmark.pdf
+        </text>
+        <rect x={298} y={740} width={274} height={56} rx={16} fill="#111" />
+        <text x={435} y={776} textAnchor="middle" fontSize={23} fontWeight={760} fill="#fff">
+          file selected
+        </text>
+
+        <g transform="translate(690 430)">
+          {["Provider: OpenRouter", "Model: quickmt", "Target: Korean"].map((label, i) => (
+            <g key={label} transform={`translate(0 ${i * 116})`}>
+              <text x={0} y={0} fontSize={22} fontWeight={700} fill="#6e6e73">
+                {label.split(":")[0]}
+              </text>
+              <rect x={0} y={22} width={380} height={62} rx={18} fill="#f7f7f9" stroke="#d2d2d7" />
+              <text x={24} y={63} fontSize={25} fontWeight={680} fill="#111">
+                {label.split(": ")[1]}
+              </text>
+            </g>
+          ))}
+          <rect x={0} y={370} width={380} height={70} rx={20} fill="#0071e3" />
+          <text x={190} y={415} textAnchor="middle" fontSize={28} fontWeight={820} fill="#fff">
+            Translate
+          </text>
+        </g>
+
+        <g transform="translate(1195 430)">
+          <circle cx={170} cy={132} r={94} fill="none" stroke="#e5e5ea" strokeWidth={24} />
+          <path
+            d="M 170 38 A 94 94 0 1 1 88 180"
+            fill="none"
+            stroke="#0071e3"
+            strokeWidth={24}
+            strokeLinecap="round"
+            strokeDasharray={`${590 * progress} 590`}
+          />
+          <text x={170} y={146} textAnchor="middle" fontSize={42} fontWeight={820} fill="#111">
+            {Math.round(progress * 100)}%
+          </text>
+          <rect x={0} y={320} width={340} height={66} rx={20} fill="#111" />
+          <text x={170} y={362} textAnchor="middle" fontSize={26} fontWeight={800} fill="#fff">
+            Download PDF
+          </text>
+        </g>
+      </FadeUp>
+    </Shell>
+  );
+};
+
+const strengths = ["Fast parse", "Gradio-first", "Docker start", "Local models", "Persistent workspace"];
+
+const Section07 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={6}>
+    <TitleBlock frame={frame} title="What works well" subtitle="작게 시작해도 제품 흐름은 선명합니다" y={220} />
+    <g transform="translate(230 475)">
+      {strengths.map((item, i) => {
+        const p = clamp(s(frame, 30 + i * 9));
+        return (
+          <g key={item} opacity={p} transform={`translate(${i * 300} ${interpolate(p, [0, 1], [40, 0])})`}>
+            <rect width={250} height={220} rx={32} fill="#fff" stroke="#d2d2d7" filter="url(#soft-6)" />
+            <text x={125} y={104} textAnchor="middle" fontSize={52} fontWeight={860} fill={i === 0 ? "#0071e3" : "#111"}>
+              {i + 1}
+            </text>
+            <text x={125} y={162} textAnchor="middle" fontSize={24} fontWeight={760} fill="#111">
+              {item}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  </Shell>
+);
+
+const Section08 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={7}>
+    <TitleBlock frame={frame} title="Next, measure more" subtitle="샘플 결과와 벤치마크를 README에 계속 누적" y={220} />
+    <FadeUp frame={frame} start={28}>
+      {[
+        ["README video", "done"],
+        ["Sample outputs", "next"],
+        ["More PDF2zh runs", "next"],
+      ].map(([title, state], i) => (
+        <g key={title} transform={`translate(${360 + i * 420} 500)`}>
+          <rect width={320} height={250} rx={36} fill="#fff" stroke="#d2d2d7" filter="url(#soft-7)" />
+          <text x={160} y={116} textAnchor="middle" fontSize={30} fontWeight={800} fill="#111">
+            {title}
+          </text>
+          <rect x={92} y={165} width={136} height={46} rx={23} fill={state === "done" ? "#0071e3" : "#e5e5ea"} />
+          <text x={160} y={196} textAnchor="middle" fontSize={19} fontWeight={820} fill={state === "done" ? "#fff" : "#6e6e73"}>
+            {state}
+          </text>
+        </g>
+      ))}
+    </FadeUp>
+  </Shell>
+);
+
+const Section09 = ({frame}: {frame: number}) => (
+  <Shell frame={frame} index={8}>
+    <FadeUp frame={frame} start={8}>
+      <text x={W / 2} y={360} textAnchor="middle" fontSize={118} fontWeight={880} fill="#050505">
+        Fast parsing.
+      </text>
+      <text x={W / 2} y={470} textAnchor="middle" fontSize={118} fontWeight={880} fill="#050505">
+        Clean control.
+      </text>
+      <text x={W / 2} y={610} textAnchor="middle" fontSize={34} fontWeight={560} fill="#6e6e73">
+        OpenPDF2ZH Workbench for Gradio-first PDF translation.
+      </text>
+    </FadeUp>
+    <FadeUp frame={frame} start={54}>
+      <text x={W / 2} y={825} textAnchor="middle" fontSize={62} fontWeight={840} fill="#111">
+        clone  run  translate
+      </text>
+    </FadeUp>
+  </Shell>
+);
+
+const scenes = [Section01, Section02, Section03, Section04, Section05, Section06, Section07, Section08, Section09];
+
+export const MyComposition = () => {
+  const frame = useCurrentFrame();
+  const {durationInFrames} = useVideoConfig();
+  const total = sectionDurations.reduce((sum, duration) => sum + duration, 0);
+  const overflow = Math.max(0, durationInFrames - total);
+
+  return (
+    <AbsoluteFill>
+      {scenes.map((Scene, index) => {
+        const from = sumBefore(index) + (index === scenes.length - 1 ? overflow : 0);
+        return (
+          <Sequence key={sections[index].id} from={from} durationInFrames={sectionDurations[index]}>
+            <Scene frame={frame - from} />
+          </Sequence>
+        );
+      })}
+    </AbsoluteFill>
+  );
+};
+
+export const TOTAL_FRAMES = sectionDurations.reduce((sum, duration) => sum + duration, 0);
