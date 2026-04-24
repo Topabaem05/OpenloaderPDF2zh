@@ -5,15 +5,15 @@ This file combines the product constraints in `agent.md` with commands and code 
 ## Repo snapshot
 - Package: `openpdf2zh-gradio`
 - Language: Python 3.10+
-- UI: Gradio only
+- UI: Gradio plus a React workbench under `apps/web/workbench`
 - Packaging: setuptools via `pyproject.toml`
 - Source root: `src/`
 - Entrypoint: `python app.py`
-- Tests: no checked-in test suite
+- Tests: `tests/`
 - Lint: `ruff`
 ## Hard constraints
-- Keep the project Python-only.
-- Do not add Electron, React, Vite, or frontend build tooling.
+- Keep the Python package under `src/`.
+- Keep React/Vite workbench code isolated under `apps/web/workbench`.
 - Keep the UX single-page in Gradio when possible.
 - Preserve the Parse → Translate → Render mental model.
 - Keep output artifacts stable: `translated_mono.pdf`, `structured.json`, `result.md`.
@@ -28,7 +28,9 @@ This file combines the product constraints in `agent.md` with commands and code 
 - `src/openpdf2zh/services/*.py`: parser, translation, rendering.
 - `src/openpdf2zh/providers/*.py`: thin provider wrappers.
 - `src/openpdf2zh/utils/files.py`: workspace and file helpers.
-- `agent.md`: existing repo-specific agent guidance.
+- `apps/web/workbench`: React workbench frontend.
+- `tools/layout/pretext-helper`: browser-based layout measurement helper.
+- `tools/models/materialize_quickmt_models.py`: local model materialization script.
 ## Commands
 Setup and install:
 ```bash

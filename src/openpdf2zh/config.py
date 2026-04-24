@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-OPENROUTER_FIXED_MODEL = "qwen/qwen3.6-plus:free"
+OPENROUTER_FIXED_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 OPENROUTER_API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_PROVIDER = "groq"
 OPENROUTER_PROVIDER_ALIASES = frozenset({"groq", "openrouter"})

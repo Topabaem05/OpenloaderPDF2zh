@@ -57,7 +57,7 @@ async function loadPlaywright() {
     return await import("playwright");
   } catch (error) {
     throw new Error(
-      "The Playwright package is not installed. Run `npm install` in tools/pretext_layout_helper/."
+      "The Playwright package is not installed. Run `npm install` in tools/layout/pretext-helper/."
     );
   }
 }
@@ -67,7 +67,7 @@ function resolvePretextModuleUrl() {
     return pathToFileURL(require.resolve("@chenglou/pretext")).href;
   } catch (error) {
     throw new Error(
-      "The @chenglou/pretext package is not installed. Run `npm install` in tools/pretext_layout_helper/."
+      "The @chenglou/pretext package is not installed. Run `npm install` in tools/layout/pretext-helper/."
     );
   }
 }

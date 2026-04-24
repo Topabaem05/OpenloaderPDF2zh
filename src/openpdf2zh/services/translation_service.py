@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, Iterable
 
 from openpdf2zh.config import AppSettings, OPENROUTER_PROVIDER, normalize_provider
@@ -22,8 +22,46 @@ class TranslationService:
     EXPLICIT_LINE_SPLIT_WIDTH_RATIO = 1.45
     EXPLICIT_LINE_SPLIT_HEIGHT_RATIO = 1.75
     EXCESSIVE_REPEAT_PATTERN = re.compile(r"([^\s])\1{9,}")
+    EXCESSIVE_FRAGMENT_PATTERN = re.compile(r"([A-Za-z가-힣]{2,4})\1{4,}")
+    EXCESSIVE_SPACED_TOKEN_PATTERN = re.compile(r"\b([A-Za-z가-힣])(?:\s+\1){4,}\b")
+    SUSPICIOUS_TRANSLATION_PATTERN = re.compile(
+        r"관련검색|검색사이트|다운로드|브랜드명|상품명|정 피곤|욕구알아보기|가필니다|e-도서|publication",
+        re.IGNORECASE,
+    )
     TOC_LEADER_PATTERN = re.compile(
         r"(?P<leader>(?:\.\s*){4,}|(?:·\s*){4,}|(?:․\s*){4,})(?P<page>[A-Za-z0-9ivxlcdmIVXLCDM]+)"
+    )
+    TOC_TRAILING_PAGE_PATTERN = re.compile(
+        r"^(?P<title>.+?)\s+(?P<page>\d{1,4}|[ivxlcdmIVXLCDM]{1,8})$"
+    )
+    SECTION_ITEM_PATTERN = re.compile(r"(?<!\S)\d+(?:\.\d+)+(?=\s)")
+    CHAPTER_ONLY_PATTERN = re.compile(r"^Chapter\s+(?P<number>\d+)\s*$", re.IGNORECASE)
+    CHAPTER_TITLE_PATTERN = re.compile(
+        r"^(?P<prefix>Chapter\s+\d+)(?P<title>\s*[A-Z].+)$",
+        re.IGNORECASE,
+    )
+    PART_ONLY_PATTERN = re.compile(r"^PART\s*$", re.IGNORECASE)
+    FALLBACK_PHRASE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+        ("Integrated Work Challenge:", "통합 과제:"),
+        ("Applied Aerodynamics:", "응용 공기역학:"),
+        ("Historical Note:", "역사적 참고:"),
+        ("Models of the Fluid:", "유체 모델:"),
+        ("Shock-Expansion Theory:", "충격-팽창 이론:"),
+        ("Airplane Lift and Drag", "비행기 양력과 항력"),
+        ("The Flow over a Sphere—The Real Case", "구 주위의 흐름 - 실제 사례"),
+        ("The Flow over a Sphere-The Real Case", "구 주위의 흐름 - 실제 사례"),
+        (
+            "Relation Between Aerodynamic Drag and the Loss of Total Pressure in the Flow Field",
+            "공력 항력과 유동장 전체 압력 손실의 관계",
+        ),
+        ("Control Volumes and Fluid Elements", "제어 체적과 유체 요소"),
+        ("Applications to Supersonic Airfoils", "초음속 에어포일에 대한 적용"),
+        ("Comments", "논평"),
+        ("Comment", "논평"),
+        ("Summary", "요약"),
+        ("Problems", "문제"),
+        ("Introduction and Road Map", "소개 및 로드맵"),
+        ("Introduction", "소개"),
     )
 
     def __init__(self, settings: AppSettings) -> None:
@@ -93,7 +131,10 @@ class TranslationService:
                         target_language=request.target_language,
                         model=request.model,
                     )
-                    unit.translated = self._sanitize_translated_text(unit.translated)
+                    unit.translated = self._postprocess_translated_text(
+                        unit,
+                        unit.translated,
+                    )
                 except RuntimeError as exc:
                     append_run_log(
                         workspace.run_log,
@@ -217,15 +258,15 @@ class TranslationService:
         units = self._deduplicate_overlapping_units(units)
         processed: list[TranslationUnit] = []
         for unit in units:
-            toc_units = self._split_toc_unit(unit)
-            if len(toc_units) != 1 or toc_units[0] is not unit:
-                for toc_unit in toc_units:
-                    processed.extend(self._split_explicit_multiline_unit(toc_unit))
-                continue
-
             list_units = self._split_list_item_unit(unit)
             for list_unit in list_units:
-                processed.extend(self._split_explicit_multiline_unit(list_unit))
+                toc_units = self._split_toc_unit(list_unit)
+                for toc_unit in toc_units:
+                    normalized_units = self._normalize_special_units(toc_unit)
+                    for normalized_unit in normalized_units:
+                        processed.extend(
+                            self._split_explicit_multiline_unit(normalized_unit)
+                        )
 
         for index, unit in enumerate(processed, start=1):
             unit.unit_id = f"u{index:05d}"
@@ -327,32 +368,129 @@ class TranslationService:
     def _single_line_error(self, exc: Exception) -> str:
         return " ".join(str(exc).split())
 
+    def _postprocess_translated_text(
+        self,
+        unit: TranslationUnit,
+        text: str,
+    ) -> str:
+        normalized_original = " ".join(unit.original.split()).strip()
+        sanitized = self._sanitize_translated_text(text).strip()
+        sanitized = self._apply_domain_term_corrections(unit.original, sanitized)
+        fallback_candidate = self._fallback_translate_original(unit.original)
+
+        structural_override = self._translate_structural_unit(unit)
+        if structural_override is not None:
+            return structural_override
+
+        if fallback_candidate != normalized_original and sanitized == normalized_original:
+            return fallback_candidate
+
+        if self._looks_like_suspicious_translation(sanitized):
+            return fallback_candidate
+
+        return sanitized
+
     def _sanitize_translated_text(self, text: str) -> str:
-        return self.EXCESSIVE_REPEAT_PATTERN.sub(
+        sanitized = self.EXCESSIVE_FRAGMENT_PATTERN.sub(
             lambda match: match.group(1),
             text,
         )
+        sanitized = self.EXCESSIVE_SPACED_TOKEN_PATTERN.sub(
+            lambda match: match.group(1),
+            sanitized,
+        )
+        return self.EXCESSIVE_REPEAT_PATTERN.sub(
+            lambda match: match.group(1),
+            sanitized,
+        )
+
+    def _apply_domain_term_corrections(self, original: str, translated: str) -> str:
+        corrected = translated
+        if "Comment" in original:
+            corrected = corrected.replace("댓글", "논평")
+        if "Comments" in original:
+            corrected = corrected.replace("댓글", "논평")
+        if "Airspeed" in original:
+            corrected = corrected.replace("Airspeed", "대기속도")
+        if "Vortex Sheet" in original:
+            corrected = corrected.replace("Vortex Sheet", "와류 시트")
+        if "Coe!cient" in original or "Coefficient" in original:
+            corrected = corrected.replace("Coe!cient", "계수")
+            corrected = corrected.replace("Coefficient", "계수")
+        return corrected
+
+    def _translate_structural_unit(self, unit: TranslationUnit) -> str | None:
+        normalized = " ".join(unit.original.split()).strip()
+        if not normalized:
+            return None
+
+        chapter_match = self.CHAPTER_ONLY_PATTERN.match(normalized)
+        if chapter_match is not None:
+            return f"{chapter_match.group('number')}장"
+
+        if self.PART_ONLY_PATTERN.match(normalized):
+            if unit.toc_page_number:
+                return f"부 {unit.toc_page_number}"
+            return "부"
+
+        part_match = re.match(r"^PART\s+(?P<number>\d+)$", normalized, re.IGNORECASE)
+        if part_match is not None:
+            return f"부 {part_match.group('number')}"
+
+        return None
+
+    def _looks_like_suspicious_translation(self, text: str) -> bool:
+        if not text:
+            return False
+        return self.SUSPICIOUS_TRANSLATION_PATTERN.search(text) is not None
+
+    def _fallback_translate_original(self, original: str) -> str:
+        fallback = " ".join(original.split()).strip()
+        if not fallback:
+            return fallback
+
+        chapter_match = self.CHAPTER_ONLY_PATTERN.match(fallback)
+        if chapter_match is not None:
+            return f"{chapter_match.group('number')}장"
+
+        part_match = re.match(r"^PART\s+(?P<number>\d+)$", fallback, re.IGNORECASE)
+        if part_match is not None:
+            return f"부 {part_match.group('number')}"
+
+        for source, target in self.FALLBACK_PHRASE_REPLACEMENTS:
+            fallback = fallback.replace(source, target)
+        return fallback
 
     def _split_toc_unit(self, unit: TranslationUnit) -> list[TranslationUnit]:
         matches = list(self.TOC_LEADER_PATTERN.finditer(unit.original))
-        if not matches:
+        if matches:
+            segments: list[tuple[str, str]] = []
+            previous_end = 0
+            for match in matches:
+                title = unit.original[previous_end : match.start()].strip()
+                page_number = match.group("page").strip()
+                if title and page_number:
+                    segments.append((title, page_number))
+                previous_end = match.end()
+
+            if len(segments) <= 1 and unit.original.count(".") < 8:
+                return [unit]
+            if not segments:
+                return [unit]
+
+            return self._subdivide_toc_bbox(unit, segments)
+
+        if unit.label.strip().lower() != "list item":
+            return [unit]
+        match = self.TOC_TRAILING_PAGE_PATTERN.match(unit.original.strip())
+        if match is None:
             return [unit]
 
-        segments: list[tuple[str, str]] = []
-        previous_end = 0
-        for match in matches:
-            title = unit.original[previous_end : match.start()].strip()
-            page_number = match.group("page").strip()
-            if title and page_number:
-                segments.append((title, page_number))
-            previous_end = match.end()
-
-        if len(segments) <= 1 and unit.original.count(".") < 8:
+        title = match.group("title").strip()
+        page_number = match.group("page").strip()
+        if not title or not page_number:
             return [unit]
-        if not segments:
-            return [unit]
-
-        return self._subdivide_toc_bbox(unit, segments)
+        return self._subdivide_toc_bbox(unit, [(title, page_number)])
 
     def _split_list_item_unit(self, unit: TranslationUnit) -> list[TranslationUnit]:
         if unit.label.strip().lower() != "list item":
@@ -373,6 +511,22 @@ class TranslationService:
         if not text:
             return []
 
+        section_matches = list(self.SECTION_ITEM_PATTERN.finditer(text))
+        if len(section_matches) > 1:
+            parts: list[str] = []
+            for index, match in enumerate(section_matches):
+                start = match.start()
+                end = (
+                    section_matches[index + 1].start()
+                    if index + 1 < len(section_matches)
+                    else len(text)
+                )
+                segment = text[start:end].strip()
+                if segment:
+                    parts.append(segment)
+            if parts:
+                return parts
+
         matches = list(re.finditer(r"[●•▪◦■□]|(?:(?<!\S)\d+[.)])", text))
         if len(matches) <= 1:
             return [text]
@@ -390,6 +544,81 @@ class TranslationService:
             if segment:
                 parts.append(segment)
         return parts or [text]
+
+    def _normalize_special_units(self, unit: TranslationUnit) -> list[TranslationUnit]:
+        if unit.toc_page_number and self.PART_ONLY_PATTERN.match(unit.original.strip()):
+            return [
+                replace(
+                    unit,
+                    label="paragraph",
+                    original=f"PART {unit.toc_page_number}",
+                    toc_page_number="",
+                )
+            ]
+
+        normalized = " ".join(unit.original.split()).strip()
+        if unit.toc_page_number:
+            return [unit]
+
+        inline_page_unit = self._extract_inline_page_number_unit(unit, normalized)
+        if inline_page_unit is not None:
+            return [inline_page_unit]
+
+        if unit.label.strip().lower() not in {"heading", "paragraph"}:
+            return [unit]
+
+        chapter_match = self.CHAPTER_TITLE_PATTERN.match(normalized)
+        if chapter_match is None:
+            return [unit]
+
+        prefix = chapter_match.group("prefix").strip()
+        title = chapter_match.group("title").strip()
+        if not prefix or not title:
+            return [unit]
+
+        split_units = self._subdivide_unit_bbox_with_gaps(unit, [prefix, title])
+        if len(split_units) != 2:
+            return [unit]
+
+        split_units[0].original = prefix
+        title_match = self.TOC_TRAILING_PAGE_PATTERN.match(title)
+        if title_match is not None:
+            split_units[1].original = title_match.group("title").strip()
+            split_units[1].toc_page_number = title_match.group("page").strip()
+        else:
+            split_units[1].original = title
+        return split_units
+
+    def _extract_inline_page_number_unit(
+        self,
+        unit: TranslationUnit,
+        normalized: str,
+    ) -> TranslationUnit | None:
+        match = self.TOC_TRAILING_PAGE_PATTERN.match(normalized)
+        if match is None:
+            return None
+
+        title = match.group("title").strip()
+        page_number = match.group("page").strip()
+        if not title or not page_number:
+            return None
+
+        label = unit.label.strip().lower()
+        if self.SECTION_ITEM_PATTERN.match(title):
+            target_label = "list item"
+        elif label == "heading":
+            target_label = "paragraph"
+        elif label == "paragraph" and len(title.split()) <= 8:
+            target_label = "paragraph"
+        else:
+            return None
+
+        return replace(
+            unit,
+            label=target_label,
+            original=title,
+            toc_page_number=page_number,
+        )
 
     def _extract_explicit_line_segments(self, content: str) -> list[str]:
         paragraph_segments = [

@@ -3,10 +3,10 @@ NIXPACKS_PYTHON_VERSION = "3.11"
 NIXPACKS_PYTHON_PACKAGE_MANAGER = "requirements"
 
 [phases.setup]
-aptPkgs = ["...", "openjdk-17-jre-headless"]
+aptPkgs = ["...", "openjdk-17-jre-headless", "nodejs", "npm"]
 
 [phases.build]
-cmds = ["bash scripts/railway-build.sh"]
+cmds = ["bash deploy/railway/build.sh"]
 
 [start]
 cmd = "python app.py"

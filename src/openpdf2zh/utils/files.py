@@ -30,8 +30,8 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def prepare_workspace(root: Path, source_pdf: Path) -> JobWorkspace:
-    job_id = make_job_id(source_pdf.stem)
+def prepare_workspace(root: Path, source_pdf: Path, job_id: str = "") -> JobWorkspace:
+    job_id = job_id or make_job_id(source_pdf.stem)
     public_root = ensure_dir(root / "public")
     workspace_dir = ensure_dir(root / job_id)
     public_dir = ensure_dir(public_root / job_id)

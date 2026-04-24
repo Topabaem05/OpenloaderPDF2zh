@@ -1,0 +1,30 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python app.py
+    environment:
+      OPENPDF2ZH_HOST: "0.0.0.0"
+      OPENPDF2ZH_PORT: "7860"
+      OPENPDF2ZH_WORKSPACE_ROOT: "/app/workspace"
+      OPENPDF2ZH_DEFAULT_PROVIDER: "${OPENPDF2ZH_DEFAULT_PROVIDER:-}"
+      OPENPDF2ZH_DEFAULT_MODEL: "${OPENPDF2ZH_DEFAULT_MODEL:-}"
+      OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE: "${OPENPDF2ZH_DEFAULT_TARGET_LANGUAGE:-Simplified Chinese}"
+      OPENPDF2ZH_CTRANSLATE2_MODEL_DIR: "${OPENPDF2ZH_CTRANSLATE2_MODEL_DIR:-/app/models}"
+      OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH: "${OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH:-}"
+      OPENPDF2ZH_RENDER_FONT_PATH: "${OPENPDF2ZH_RENDER_FONT_PATH:-}"
+      OPENPDF2ZH_RENDER_LAYOUT_ENGINE: "${OPENPDF2ZH_RENDER_LAYOUT_ENGINE:-legacy}"
+      OPENPDF2ZH_JOB_QUEUE_CONCURRENCY: "${OPENPDF2ZH_JOB_QUEUE_CONCURRENCY:-2}"
+      OPENPDF2ZH_JOB_QUEUE_MAX_SIZE: "${OPENPDF2ZH_JOB_QUEUE_MAX_SIZE:-8}"
+    ports:
+      - "${OPENPDF2ZH_PORT:-7860}:7860"
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./workspace
+        target: /app/workspace
+      - type: bind
+        source: ${OPENPDF2ZH_HOST_MODEL_DIR:-./models}
+        target: /app/models
+        read_only: true

@@ -155,11 +155,11 @@ LAYOUT_ENGINE_CHOICES = [
 MAX_INPUT_PDF_BYTES = 50 * 1024 * 1024
 
 SECURITY_HEADERS = {
-    "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+    "Content-Security-Policy": "frame-ancestors 'self'; object-src 'none'; base-uri 'self'; form-action 'self'",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
+    "X-Frame-Options": "SAMEORIGIN",
 }
 
 ADSENSE_HEAD = """
@@ -174,7 +174,7 @@ def _build_bmc_button_html() -> str:
         '<div class="bmc-slot">'
         '<a href="https://buymeacoffee.com/choijjs83q" target="_blank" '
         'rel="noopener noreferrer" aria-label="Buy me a coffee">'
-        f'<img class="bmc-image" alt="Buy me a coffee" src="/gradio_api/file={quote(str(BMC_IMAGE_PATH))}" />'
+        f'<img class="bmc-image" alt="Buy me a coffee" src="./gradio_api/file={quote(str(BMC_IMAGE_PATH))}" />'
         "</a>"
         "</div>"
     )
@@ -329,7 +329,7 @@ def _build_pdf_preview(
         )
 
     image_path, _, _ = _render_pdf_preview_page(path, page_number)
-    image_url = f"/gradio_api/file={quote(str(image_path))}"
+    image_url = f"./gradio_api/file={quote(str(image_path))}"
     return (
         "<div class='pdf-preview-shell'>"
         "<div class='pdf-preview-viewport'>"
@@ -356,7 +356,7 @@ def _resolve_preview_state(
     image_path, resolved_page, total_pages = _render_pdf_preview_page(
         pdf_path, current_page
     )
-    image_url = f"/gradio_api/file={quote(str(image_path))}"
+    image_url = f"./gradio_api/file={quote(str(image_path))}"
     html = (
         "<div class='pdf-preview-shell'>"
         "<div class='pdf-preview-viewport'>"
@@ -439,6 +439,22 @@ def _resolve_client_ip(request: gr.Request | None, settings: AppSettings) -> str
     return _extract_request_client_host(request)
 
 
+def _is_local_client_ip(client_ip: str) -> bool:
+    normalized = client_ip.strip().lower()
+    if not normalized:
+        return True
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _should_enforce_rate_limit(client_ip: str, settings: AppSettings) -> bool:
+    return settings.rate_limit_enabled and not _is_local_client_ip(client_ip)
+
+
 def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
     settings = settings or AppSettings.from_env()
     job_limiter = JobLimiter(
@@ -493,7 +509,7 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                             placeholder="sk-or-v1-...",
                             type="password",
                         )
-                        openrouter_model = gr.Textbox(
+                        gr.Textbox(
                             label="OpenRouter model",
                             value=OPENROUTER_FIXED_MODEL,
                             interactive=False,
@@ -700,7 +716,10 @@ def create_demo(settings: AppSettings | None = None) -> gr.Blocks:
                         page_limit=_resolve_page_limit(page_mode),
                         font_size=settings.base_font_size,
                     )
-                    if quota_service is None:
+                    if quota_service is None or not _should_enforce_rate_limit(
+                        client_ip,
+                        runner_settings,
+                    ):
                         result = _run_pipeline_or_raise_gradio(
                             runner,
                             request,
@@ -984,30 +1003,13 @@ def _attach_security_middleware(app: FastAPI) -> None:
 
 
 def launch() -> None:
+    from openpdf2zh.webapp import create_app
+
     settings = AppSettings.from_env()
     start_workspace_cleanup_worker(
         settings.workspace_root,
         settings.workspace_retention_hours * 3600,
         settings.workspace_cleanup_interval_seconds,
     )
-    demo = create_demo(settings)
-    demo.queue(
-        default_concurrency_limit=settings.job_queue_concurrency,
-        max_size=(settings.job_queue_concurrency + settings.job_queue_max_size + 4),
-    )
-    app = FastAPI()
-    _attach_adsense_route(app)
-    _attach_security_middleware(app)
-    app = gr.mount_gradio_app(
-        app,
-        demo,
-        path="/",
-        server_name=settings.host,
-        server_port=settings.port,
-        allowed_paths=[str(settings.public_root), str(BMC_IMAGE_PATH)],
-        theme=gr.themes.Soft(),
-        css=CSS,
-        head=ADSENSE_HEAD_STATIC,
-        max_file_size="50mb",
-    )
+    app = create_app(settings)
     uvicorn.run(app, host=settings.host, port=settings.port)

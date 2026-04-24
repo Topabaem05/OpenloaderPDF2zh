@@ -7,16 +7,16 @@ This 1920x1080 guide video focuses on fast parsing and the Gradio UI flow, based
 </p>
 
 <p align="center">
-  <a href="docs/readme-video/openpdf2zh-usage-guide.mp4">
-    <img src="docs/readme-video/openpdf2zh-usage-guide-preview.gif" alt="OpenPDF2ZH app usage guide video preview" width="960" />
+  <a href="docs/media/readme-video/openpdf2zh-usage-guide.mp4">
+    <img src="docs/media/readme-video/openpdf2zh-usage-guide-preview.gif" alt="OpenPDF2ZH app usage guide video preview" width="960" />
   </a>
 </p>
 
 <p align="center">
-  <a href="docs/readme-video/openpdf2zh-usage-guide.mp4">Watch the app usage guide video (MP4)</a>
+  <a href="docs/media/readme-video/openpdf2zh-usage-guide.mp4">Watch the app usage guide video (MP4)</a>
 </p>
 
-`openpdf2zh_gradio` runs the FastAPI backend for the PDF translation pipeline and exposes the current Gradio UI at `/gradio`. The repository also contains the React workbench, but the Docker quick start below is Gradio-first and does not build the frontend.
+`openpdf2zh_gradio` runs the FastAPI backend for the PDF translation pipeline and exposes the current Gradio UI at `/gradio`. The repository also contains the React workbench under `apps/web/workbench`, but the Docker quick start below is Gradio-first and does not build the frontend.
 
 ## Quick Start
 

@@ -7,6 +7,7 @@ import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import pymupdf as fitz
 
@@ -15,6 +16,56 @@ from openpdf2zh.config import AppSettings
 PT_TO_PX = 96.0 / 72.0
 PX_TO_PT = 72.0 / 96.0
 MeasurementResult = dict[str, float | int | None | str]
+T = TypeVar("T")
+
+
+def same_column(rect: fitz.Rect, anchor: fitz.Rect) -> bool:
+    overlap = min(rect.x1, anchor.x1) - max(rect.x0, anchor.x0)
+    min_width = max(min(rect.width, anchor.width), 1.0)
+    if overlap / min_width >= 0.55:
+        return True
+    tolerance = max(12.0, min_width * 0.18)
+    return (
+        abs(rect.x0 - anchor.x0) <= tolerance
+        and abs(rect.x1 - anchor.x1) <= tolerance
+    )
+
+
+def build_column_clusters(
+    items: list[T],
+    *,
+    rect_getter: Callable[[T], fitz.Rect],
+) -> list[list[T]]:
+    clusters: list[list[T]] = []
+    anchors: list[fitz.Rect] = []
+    ordered = sorted(
+        items,
+        key=lambda item: (rect_getter(item).x0, rect_getter(item).y0),
+    )
+
+    for item in ordered:
+        rect = rect_getter(item)
+        assigned = False
+        for index, anchor in enumerate(anchors):
+            if same_column(rect, anchor):
+                clusters[index].append(item)
+                assigned = True
+                break
+        if not assigned:
+            clusters.append([item])
+            anchors.append(rect)
+
+    for cluster in clusters:
+        cluster.sort(
+            key=lambda item: (rect_getter(item).y0, rect_getter(item).x0)
+        )
+    clusters.sort(
+        key=lambda cluster: (
+            rect_getter(cluster[0]).x0,
+            rect_getter(cluster[0]).y0,
+        )
+    )
+    return clusters
 
 
 @dataclass(slots=True)
@@ -86,7 +137,7 @@ class PretextMeasurementClient:
         timeout_seconds: float = 20.0,
     ) -> None:
         repo_root = Path(__file__).resolve().parents[3]
-        default_helper_dir = repo_root / "tools" / "pretext_layout_helper"
+        default_helper_dir = repo_root / "tools" / "layout" / "pretext-helper"
         if helper_path:
             configured_helper = Path(helper_path).expanduser().resolve()
             if configured_helper.is_dir():
@@ -597,36 +648,13 @@ class LayoutPlanner:
         return min(upper.y1, lower.y1) - max(upper.y0, lower.y0)
 
     def _build_clusters(self, blocks: list[LayoutBlock]) -> list[list[LayoutBlock]]:
-        clusters: list[list[LayoutBlock]] = []
-        anchors: list[fitz.Rect] = []
-        ordered = sorted(blocks, key=lambda block: (block.render_rect.x0, block.render_rect.y0))
-
-        for block in ordered:
-            assigned = False
-            for index, anchor in enumerate(anchors):
-                if self._same_column(block.render_rect, anchor):
-                    clusters[index].append(block)
-                    assigned = True
-                    break
-            if not assigned:
-                clusters.append([block])
-                anchors.append(block.render_rect)
-
-        for cluster in clusters:
-            cluster.sort(key=lambda block: (block.render_rect.y0, block.render_rect.x0))
-        clusters.sort(key=lambda cluster: (cluster[0].render_rect.x0, cluster[0].render_rect.y0))
-        return clusters
+        return build_column_clusters(
+            blocks,
+            rect_getter=lambda block: block.render_rect,
+        )
 
     def _same_column(self, rect: fitz.Rect, anchor: fitz.Rect) -> bool:
-        overlap = min(rect.x1, anchor.x1) - max(rect.x0, anchor.x0)
-        min_width = max(min(rect.width, anchor.width), 1.0)
-        if overlap / min_width >= 0.55:
-            return True
-        tolerance = max(12.0, min_width * 0.18)
-        return (
-            abs(rect.x0 - anchor.x0) <= tolerance
-            and abs(rect.x1 - anchor.x1) <= tolerance
-        )
+        return same_column(rect, anchor)
 
     def _uses_pretext(self, block: LayoutBlock) -> bool:
         return (

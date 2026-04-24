@@ -14,7 +14,13 @@ from openpdf2zh.config import (
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.providers.openrouter import OpenRouterTranslator
 from openpdf2zh.services.translation_service import TranslationService
-from openpdf2zh.ui import _model_for_provider, _uses_openrouter, create_demo
+from openpdf2zh.ui import (
+    _is_local_client_ip,
+    _model_for_provider,
+    _should_enforce_rate_limit,
+    _uses_openrouter,
+    create_demo,
+)
 
 
 def test_openrouter_translator_serializes_chat_completion_request(
@@ -211,3 +217,19 @@ def test_ui_exposes_openrouter_controls_and_fixed_model() -> None:
     )
     assert target_language_update["value"] == "English"
     assert openrouter_controls_update["visible"] is True
+
+
+def test_ui_rate_limit_exempts_only_loopback_clients() -> None:
+    settings = AppSettings(rate_limit_enabled=True)
+
+    assert _is_local_client_ip("127.0.0.1") is True
+    assert _is_local_client_ip("::1") is True
+    assert _is_local_client_ip("localhost") is True
+    assert _is_local_client_ip("1.1.1.1") is False
+    assert _is_local_client_ip("192.168.0.10") is False
+
+    assert _should_enforce_rate_limit("127.0.0.1", settings) is False
+    assert _should_enforce_rate_limit("::1", settings) is False
+    assert _should_enforce_rate_limit("localhost", settings) is False
+    assert _should_enforce_rate_limit("1.1.1.1", settings) is True
+    assert _should_enforce_rate_limit("192.168.0.10", settings) is True

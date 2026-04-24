@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.railpack.com",
-  "buildAptPackages": ["openjdk-17-jre-headless"],
+  "buildAptPackages": ["openjdk-17-jre-headless", "nodejs", "npm"],
   "steps": {
     "build": {
-      "commands": ["...", "bash scripts/railway-build.sh"]
+      "commands": ["...", "bash deploy/railway/build.sh"]
     }
   },
   "deploy": {

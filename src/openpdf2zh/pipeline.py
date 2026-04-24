@@ -31,7 +31,11 @@ class PipelineRunner:
         if progress is not None:
             progress(0.02, desc="Preparing workspace")
 
-        workspace = prepare_workspace(self.settings.workspace_root, request.input_pdf)
+        workspace = prepare_workspace(
+            self.settings.workspace_root,
+            request.input_pdf,
+            job_id=request.job_id,
+        )
         append_run_log(workspace.run_log, "pipeline=start")
         append_run_log(workspace.run_log, f"job_id={workspace.job_id}")
         append_run_log(workspace.run_log, f"input_pdf={workspace.input_pdf}")

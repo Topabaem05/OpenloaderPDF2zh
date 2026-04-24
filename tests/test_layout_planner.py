@@ -12,6 +12,7 @@ from openpdf2zh.services.layout_planner import (
     LayoutBlock,
     LayoutPlanner,
     PretextMeasurementClient,
+    build_column_clusters,
 )
 
 
@@ -85,6 +86,24 @@ def test_layout_planner_shifts_later_boxes_within_same_column_cluster() -> None:
     assert by_text["Right top"].planned_rect.y0 == by_text["Right top"].block.original_rect.y0
     assert by_text["Left bottom"].vertical_shift_pt > 0
     assert by_text["Right top"].vertical_shift_pt == 0
+
+
+def test_build_column_clusters_supports_generic_rect_items() -> None:
+    items = [
+        {"name": "left-top", "rect": fitz.Rect(0.0, 0.0, 100.0, 20.0)},
+        {"name": "left-bottom", "rect": fitz.Rect(0.0, 24.0, 100.0, 44.0)},
+        {"name": "right-top", "rect": fitz.Rect(150.0, 0.0, 250.0, 20.0)},
+    ]
+
+    clusters = build_column_clusters(
+        items,
+        rect_getter=lambda item: item["rect"],
+    )
+
+    assert [[item["name"] for item in cluster] for cluster in clusters] == [
+        ["left-top", "left-bottom"],
+        ["right-top"],
+    ]
 
 
 def test_layout_planner_tightens_typography_when_height_budget_is_tight() -> None:

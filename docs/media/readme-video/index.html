@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>OpenPDF2ZH README Guide</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #f4efe7;
+        color: #182231;
+        font-family:
+          "Pretendard",
+          "Inter",
+          "SF Pro Display",
+          "Apple SD Gothic Neo",
+          "Noto Sans KR",
+          sans-serif;
+      }
+
+      body::before,
+      body::after {
+        content: "";
+        position: absolute;
+        border-radius: 999px;
+        filter: blur(28px);
+        opacity: 0.62;
+      }
+
+      body::before {
+        top: -120px;
+        left: -80px;
+        width: 420px;
+        height: 420px;
+        background: rgba(103, 117, 255, 0.18);
+      }
+
+      body::after {
+        right: 80px;
+        bottom: -140px;
+        width: 560px;
+        height: 560px;
+        background: rgba(255, 214, 120, 0.22);
+      }
+
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+      }
+
+      .clip {
+        visibility: hidden;
+      }
+
+      .noise {
+        position: absolute;
+        inset: 0;
+        opacity: 0.08;
+        background-image:
+          linear-gradient(rgba(24, 34, 49, 0.06) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(24, 34, 49, 0.06) 1px, transparent 1px);
+        background-size: 80px 80px;
+      }
+
+      .scene {
+        position: absolute;
+        inset: 0;
+        padding: 54px 64px;
+      }
+
+      .ui-shell {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 40px;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow:
+          0 28px 70px rgba(34, 42, 57, 0.14),
+          inset 0 1px 0 rgba(255, 255, 255, 0.82);
+        overflow: hidden;
+        backdrop-filter: blur(12px);
+      }
+
+      .topbar {
+        position: absolute;
+        left: 40px;
+        right: 40px;
+        top: 28px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        z-index: 3;
+      }
+
+      .step-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 22px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 16px 40px rgba(34, 42, 57, 0.12);
+      }
+
+      .step-number {
+        width: 48px;
+        height: 48px;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #4662dc, #6f67ea);
+        color: white;
+        font-size: 24px;
+        font-weight: 800;
+      }
+
+      .step-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .step-label {
+        font-size: 14px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #667182;
+        font-weight: 700;
+      }
+
+      .step-title {
+        font-size: 22px;
+        font-weight: 800;
+        color: #172131;
+      }
+
+      .guide-pill {
+        padding: 14px 20px;
+        border-radius: 999px;
+        background: rgba(70, 98, 220, 0.12);
+        color: #3550c4;
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+      }
+
+      .ui-canvas {
+        position: absolute;
+        inset: 0;
+      }
+
+      .ui-screenshot {
+        position: absolute;
+        left: 130px;
+        top: 96px;
+        width: 1280px;
+        height: 890px;
+        border-radius: 28px;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: contain;
+        filter: drop-shadow(0 24px 56px rgba(20, 30, 46, 0.14));
+      }
+
+      #intro-shot,
+      #step1-shot,
+      #step3-shot {
+        background-image: url("assets/ui-current.png");
+      }
+
+      #step2-shot {
+        background-image: url("assets/service-dropdown.png");
+      }
+
+      .result-page {
+        position: absolute;
+        left: 829px;
+        top: 184px;
+        width: 280px;
+        height: 528px;
+        border-radius: 8px;
+        background: center / contain no-repeat url("assets/translated-page.png");
+        box-shadow: 0 20px 30px rgba(18, 29, 45, 0.14);
+      }
+
+      .focus-box {
+        position: absolute;
+        border: 5px solid #ffd25e;
+        border-radius: 28px;
+        box-shadow:
+          0 0 0 10px rgba(255, 210, 94, 0.2),
+          0 20px 40px rgba(22, 30, 45, 0.16);
+      }
+
+      .callout {
+        position: absolute;
+        max-width: 360px;
+        padding: 16px 20px;
+        border-radius: 20px;
+        background: rgba(25, 34, 49, 0.92);
+        color: white;
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 1.32;
+        letter-spacing: -0.02em;
+        box-shadow: 0 18px 34px rgba(25, 34, 49, 0.18);
+      }
+
+      .callout.light {
+        background: rgba(255, 255, 255, 0.94);
+        color: #233045;
+      }
+
+      .caption-row {
+        position: absolute;
+        left: 50%;
+        bottom: 36px;
+        transform: translateX(-50%);
+        display: inline-flex;
+        gap: 12px;
+        padding: 14px 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 16px 36px rgba(25, 34, 49, 0.12);
+        z-index: 3;
+      }
+
+      .chip {
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(70, 98, 220, 0.1);
+        color: #253246;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+    </style>
+  </head>
+  <body>
+    <div
+      id="stage"
+      data-composition-id="openpdf2zh-guide"
+      data-start="0"
+      data-duration="15"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="noise"></div>
+
+      <section
+        id="intro-scene"
+        class="scene clip"
+        data-start="0"
+        data-duration="3.2"
+        data-track-index="1"
+      >
+        <div class="ui-shell">
+          <div class="topbar">
+            <div class="step-pill">
+              <span class="step-number">0</span>
+              <span class="step-copy">
+                <span class="step-label">Overview</span>
+                <span class="step-title">Gradio UI walkthrough</span>
+              </span>
+            </div>
+            <div class="guide-pill">README video rendered with HyperFrames</div>
+          </div>
+
+          <div class="ui-canvas">
+            <div id="intro-shot" class="ui-screenshot"></div>
+            <div class="focus-box" style="left: 364px; top: 192px; width: 385px; height: 255px"></div>
+            <div class="focus-box" style="left: 357px; top: 508px; width: 438px; height: 349px"></div>
+            <div class="callout" style="left: 756px; top: 178px">Start by uploading the PDF in the left panel.</div>
+            <div class="callout light" style="left: 808px; top: 516px">Choose service, languages, and page range in the control stack.</div>
+            <div class="callout" style="left: 1188px; top: 356px">The translated preview appears in the right viewer.</div>
+          </div>
+
+          <div class="caption-row">
+            <div class="chip">Upload</div>
+            <div class="chip">Configure</div>
+            <div class="chip">Review</div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="step1-scene"
+        class="scene clip"
+        data-start="3.2"
+        data-duration="3.4"
+        data-track-index="1"
+      >
+        <div class="ui-shell">
+          <div class="topbar">
+            <div class="step-pill">
+              <span class="step-number">1</span>
+              <span class="step-copy">
+                <span class="step-label">Input</span>
+                <span class="step-title">Upload the PDF</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="ui-canvas">
+            <div id="step1-shot" class="ui-screenshot"></div>
+            <div class="focus-box" style="left: 364px; top: 192px; width: 385px; height: 255px"></div>
+            <div class="callout" style="left: 388px; top: 474px">Drop a PDF here or click to upload.</div>
+            <div class="callout light" style="left: 1064px; top: 240px">Preview stays empty until translation runs.</div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="step2-scene"
+        class="scene clip"
+        data-start="6.6"
+        data-duration="4.1"
+        data-track-index="1"
+      >
+        <div class="ui-shell">
+          <div class="topbar">
+            <div class="step-pill">
+              <span class="step-number">2</span>
+              <span class="step-copy">
+                <span class="step-label">Controls</span>
+                <span class="step-title">Choose service and page settings</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="ui-canvas">
+            <div id="step2-shot" class="ui-screenshot"></div>
+            <div class="focus-box" style="left: 370px; top: 490px; width: 454px; height: 360px"></div>
+            <div class="callout" style="left: 846px; top: 525px">Service picker and language controls stay in one stack.</div>
+            <div class="callout light" style="left: 862px; top: 655px">Page mode sits directly below for a quick first-page trial.</div>
+            <div class="callout" style="left: 682px; top: 834px">Press Translate after the settings look right.</div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="step3-scene"
+        class="scene clip"
+        data-start="10.7"
+        data-duration="4.3"
+        data-track-index="1"
+      >
+        <div class="ui-shell">
+          <div class="topbar">
+            <div class="step-pill">
+              <span class="step-number">3</span>
+              <span class="step-copy">
+                <span class="step-label">Output</span>
+                <span class="step-title">Review the translated preview</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="ui-canvas">
+            <div id="step3-shot" class="ui-screenshot"></div>
+            <div class="result-page"></div>
+            <div class="focus-box" style="left: 943px; top: 192px; width: 463px; height: 620px"></div>
+            <div class="callout" style="left: 1230px; top: 220px">Translated PDF preview</div>
+            <div class="callout light" style="left: 1090px; top: 824px">Open Generated files to download the finished output.</div>
+            <div class="callout" style="left: 515px; top: 834px">Use the page arrows to inspect preview pages.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+
+      tl.from("#intro-scene .topbar > *", { y: -26, opacity: 0, duration: 0.65, stagger: 0.08, ease: "power2.out" }, 0.15);
+      tl.from("#intro-shot", { x: 40, opacity: 0, scale: 0.97, duration: 0.9, ease: "power3.out" }, 0.36);
+      tl.from("#intro-scene .focus-box", { scale: 0.85, opacity: 0, duration: 0.52, stagger: 0.12, ease: "back.out(1.3)" }, 0.78);
+      tl.from("#intro-scene .callout", { y: 18, opacity: 0, duration: 0.42, stagger: 0.14, ease: "power2.out" }, 1.02);
+      tl.from("#intro-scene .caption-row", { y: 18, opacity: 0, duration: 0.45, ease: "power2.out" }, 1.25);
+
+      tl.from("#step1-scene .step-pill", { y: -22, opacity: 0, duration: 0.5, ease: "power2.out" }, 3.28);
+      tl.from("#step1-shot", { opacity: 0, scale: 0.98, duration: 0.68, ease: "power2.out" }, 3.42);
+      tl.from("#step1-scene .focus-box", { scale: 0.82, opacity: 0, duration: 0.48, ease: "back.out(1.3)" }, 3.78);
+      tl.from("#step1-scene .callout", { y: 16, opacity: 0, duration: 0.38, stagger: 0.16, ease: "power2.out" }, 4.0);
+
+      tl.from("#step2-scene .step-pill", { y: -22, opacity: 0, duration: 0.5, ease: "power2.out" }, 6.7);
+      tl.from("#step2-shot", { opacity: 0, scale: 0.98, duration: 0.68, ease: "power2.out" }, 6.84);
+      tl.from("#step2-scene .focus-box", { scale: 0.82, opacity: 0, duration: 0.46, ease: "back.out(1.3)" }, 7.2);
+      tl.from("#step2-scene .callout", { y: 18, opacity: 0, duration: 0.38, stagger: 0.15, ease: "power2.out" }, 7.42);
+
+      tl.from("#step3-scene .step-pill", { y: -22, opacity: 0, duration: 0.5, ease: "power2.out" }, 10.82);
+      tl.from("#step3-shot", { opacity: 0, scale: 0.98, duration: 0.64, ease: "power2.out" }, 10.96);
+      tl.from("#step3-scene .result-page", { x: 36, opacity: 0, scale: 0.96, duration: 0.66, ease: "power2.out" }, 11.18);
+      tl.from("#step3-scene .focus-box", { scale: 0.82, opacity: 0, duration: 0.46, ease: "back.out(1.3)" }, 11.34);
+      tl.from("#step3-scene .callout", { y: 18, opacity: 0, duration: 0.38, stagger: 0.14, ease: "power2.out" }, 11.56);
+
+      window.__timelines["openpdf2zh-guide"] = tl;
+    </script>
+  </body>
+</html>

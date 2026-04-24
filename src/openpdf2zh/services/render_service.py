@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import html
 import json
 import re
@@ -16,6 +17,7 @@ from openpdf2zh.services.layout_planner import (
     FitValidationResult,
     LayoutBlock,
     LayoutPlanner,
+    build_column_clusters,
 )
 from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import append_run_log, run_log_heartbeat, write_json
@@ -159,6 +161,7 @@ class RenderService:
                     planned_blocks = self._plan_render_blocks(
                         planned,
                         layout_engine,
+                        self._resolve_page_rect(page, planned),
                         render_font_family,
                         render_css,
                         render_archive,
@@ -167,10 +170,14 @@ class RenderService:
                         f"b{index:04d}": element
                         for index, element in enumerate(planned_elements, start=1)
                     }
-                    for block in planned_blocks:
-                        element = element_by_block_id.get(block.block_id)
-                        if element is not None:
-                            self._update_element_layout_metadata(element, block)
+                    column_blocks_by_id = {
+                        cluster_block.block_id: cluster
+                        for cluster in build_column_clusters(
+                            planned_blocks,
+                            rect_getter=lambda block: block.planned_rect,
+                        )
+                        for cluster_block in cluster
+                    }
 
                     current_state["planned"] = len(planned_blocks)
                     renderable_blocks = [block for block in planned_blocks if block.render_allowed]
@@ -209,6 +216,12 @@ class RenderService:
                             )
                             continue
 
+                        words_before = (
+                            self._snapshot_page_words(page)
+                            if block.layout_engine == "pretext"
+                            and not block.toc_page_number
+                            else []
+                        )
                         if block.toc_page_number:
                             spare_height, scale = self._render_toc_entry(
                                 page,
@@ -241,10 +254,19 @@ class RenderService:
                                 render_archive,
                                 block.font_size,
                                 scale_candidates=(
-                                    [1.0]
+                                    self._pretext_scale_candidates(block.font_size)
                                     if layout_engine == "pretext"
                                     else None
                                 ),
+                            )
+                        if block.layout_engine == "pretext" and not block.toc_page_number:
+                            self._apply_final_render_metrics(
+                                block,
+                                self._extract_added_text_bbox(page, words_before),
+                            )
+                            self._shift_remaining_blocks_if_needed(
+                                block,
+                                column_blocks_by_id.get(block.block_id, []),
                             )
                         if block.layout_engine == "pretext":
                             block.final_scale_used = scale
@@ -259,7 +281,7 @@ class RenderService:
                             if block.layout_engine == "pretext":
                                 block.fallback_reason = "final_render_drift_rejected"
                                 block.fallback_detail = (
-                                    "PyMuPDF final render rejected the pre-approved scale_low=1.0 candidate."
+                                    "PyMuPDF final render rejected every allowed pretext fallback scale."
                                 )
                             overflow.append(
                                 self._build_overflow_entry(
@@ -274,6 +296,10 @@ class RenderService:
                                 block,
                             )
                         )
+                    for block in planned_blocks:
+                        element = element_by_block_id.get(block.block_id)
+                        if element is not None:
+                            self._update_element_layout_metadata(element, block)
                     current_state["overflow"] = len(overflow)
                     if (
                         page_index_1based == 1
@@ -452,6 +478,7 @@ class RenderService:
             ]
         ],
         layout_engine: str,
+        page_rect: fitz.Rect,
         render_font_family: str | None,
         render_css: str | None,
         render_archive: fitz.Archive | None,
@@ -501,6 +528,7 @@ class RenderService:
         if layout_engine == "pretext":
             return self._plan_pretext_blocks(
                 blocks,
+                page_rect,
                 render_font_family,
                 render_css,
                 render_archive,
@@ -530,6 +558,7 @@ class RenderService:
     def _plan_pretext_blocks(
         self,
         blocks: list[RenderBlockPlan],
+        page_rect: fitz.Rect,
         render_font_family: str | None,
         render_css: str | None,
         render_archive: fitz.Archive | None,
@@ -564,6 +593,7 @@ class RenderService:
                 planner_block,
                 planned_rect,
                 measurement,
+                page_rect,
                 render_font_family,
                 render_css,
                 render_archive,
@@ -636,6 +666,7 @@ class RenderService:
         block: LayoutBlock,
         planned_rect: fitz.Rect,
         measurement: dict[str, float | int | None | str],
+        page_rect: fitz.Rect,
         render_font_family: str | None,
         render_css: str | None,
         render_archive: fitz.Archive | None,
@@ -648,6 +679,8 @@ class RenderService:
             block.label,
             block.translated,
             block.font_name,
+            round(page_rect.width, 3),
+            round(page_rect.height, 3),
             round(planned_rect.width, 3),
             round(planned_rect.height, 3),
             round(float(measurement.get("font_size_pt", block.font_size)), 3),
@@ -672,8 +705,8 @@ class RenderService:
         scratch_doc = fitz.open()
         try:
             scratch_page = scratch_doc.new_page(
-                width=max(planned_rect.x1 + 24.0, 256.0),
-                height=max(planned_rect.y1 + 24.0, 256.0),
+                width=max(page_rect.width, 1.0),
+                height=max(page_rect.height, 1.0),
             )
             spare_height, scale = scratch_page.insert_htmlbox(
                 fitz.Rect(planned_rect),
@@ -734,16 +767,131 @@ class RenderService:
             spare_height=result.spare_height,
         )
 
-    def _extract_text_bbox(self, page: fitz.Page) -> fitz.Rect | None:
+    def _apply_final_render_metrics(
+        self,
+        block: RenderBlockPlan,
+        actual_render_bbox: fitz.Rect | None,
+    ) -> None:
+        resolved_bbox = actual_render_bbox or block.actual_render_bbox or fitz.Rect(
+            block.planned_rect
+        )
+        block.actual_render_bbox = fitz.Rect(resolved_bbox)
+        block.top_delta_pt = round(
+            block.actual_render_bbox.y0 - block.planned_rect.y0,
+            3,
+        )
+        block.bottom_delta_pt = round(
+            block.actual_render_bbox.y1 - block.planned_rect.y1,
+            3,
+        )
+
+    def _shift_remaining_blocks_if_needed(
+        self,
+        rendered_block: RenderBlockPlan,
+        column_blocks: list[RenderBlockPlan],
+    ) -> None:
+        if rendered_block.actual_render_bbox is None:
+            return
+
+        current_found = False
+        previous_bottom = rendered_block.actual_render_bbox.y1
+        for block in column_blocks:
+            if block.block_id == rendered_block.block_id:
+                current_found = True
+                continue
+            if not current_found:
+                continue
+
+            gap = self._gap_height_for_shift(block)
+            target_y0 = max(block.planned_rect.y0, previous_bottom + gap)
+            delta = round(target_y0 - block.planned_rect.y0, 3)
+            if delta > 0.5:
+                self._shift_block_vertically(block, delta)
+
+            reference_rect = block.actual_render_bbox or block.planned_rect
+            previous_bottom = reference_rect.y1
+
+    def _shift_block_vertically(
+        self,
+        block: RenderBlockPlan,
+        delta: float,
+    ) -> None:
+        block.planned_rect = self._shift_rect_vertically(block.planned_rect, delta)
+        if block.actual_render_bbox is not None:
+            block.actual_render_bbox = self._shift_rect_vertically(
+                block.actual_render_bbox,
+                delta,
+            )
+        block.shift_pt = round(block.shift_pt + delta, 3)
+
+    def _shift_rect_vertically(self, rect: fitz.Rect, delta: float) -> fitz.Rect:
+        return fitz.Rect(rect.x0, rect.y0 + delta, rect.x1, rect.y1 + delta)
+
+    def _gap_height_for_shift(self, block: RenderBlockPlan) -> float:
+        line_height_pt = block.line_height_pt or round(block.font_size * 1.2, 3)
+        return max(1.0, round(line_height_pt * 0.12, 3))
+
+    def _snapshot_page_words(
+        self,
+        page: fitz.Page,
+    ) -> list[tuple[object, ...]]:
+        try:
+            words = page.get_text("words")
+        except (AttributeError, TypeError):
+            return []
+
+        snapshots: list[tuple[object, ...]] = []
+        for word in words:
+            if len(word) < 5:
+                continue
+            snapshots.append(
+                (
+                    round(float(word[0]), 3),
+                    round(float(word[1]), 3),
+                    round(float(word[2]), 3),
+                    round(float(word[3]), 3),
+                    str(word[4]),
+                    *tuple(word[5:8]),
+                )
+            )
+        return snapshots
+
+    def _extract_added_text_bbox(
+        self,
+        page: fitz.Page,
+        words_before: list[tuple[object, ...]],
+    ) -> fitz.Rect | None:
+        words_after = self._snapshot_page_words(page)
+        if not words_after:
+            return None
+
+        remaining = Counter(words_before)
         rects: list[fitz.Rect] = []
-        for word in page.get_text("words"):
-            if len(word) < 4:
+        for word in words_after:
+            if remaining[word] > 0:
+                remaining[word] -= 1
                 continue
             rects.append(fitz.Rect(word[:4]))
         if rects:
             return self._union_rects(rects)
+        return None
 
-        payload = page.get_text("dict")
+    def _extract_text_bbox(self, page: fitz.Page) -> fitz.Rect | None:
+        rects: list[fitz.Rect] = []
+        try:
+            for word in page.get_text("words"):
+                if len(word) < 4:
+                    continue
+                rects.append(fitz.Rect(word[:4]))
+        except (AttributeError, TypeError):
+            return None
+        if rects:
+            return self._union_rects(rects)
+
+        try:
+            payload = page.get_text("dict")
+        except (AttributeError, TypeError):
+            return None
         for block in payload.get("blocks", []):
             if not isinstance(block, dict) or block.get("type") != 0:
                 continue
@@ -1028,7 +1176,8 @@ class RenderService:
         return [0.84, 0.72, 0.58, 0.0]
 
     def _pretext_scale_candidates(self, font_size: float) -> list[float]:
-        candidates = [1.0, *self._scale_candidates(font_size)]
+        _ = font_size
+        candidates = [1.0, 0.96, 0.92]
         ordered: list[float] = []
         for value in candidates:
             rounded = round(value, 3)
@@ -1207,3 +1356,30 @@ class RenderService:
             max(point_a.x, point_b.x),
             max(point_a.y, point_b.y),
         )
+
+    def _resolve_page_rect(
+        self,
+        page: fitz.Page,
+        planned: list[
+            tuple[
+                fitz.Rect,
+                str,
+                str,
+                float,
+                str,
+                int,
+                float | None,
+                float | None,
+                str,
+            ]
+        ],
+    ) -> fitz.Rect:
+        page_rect = getattr(page, "rect", None)
+        if page_rect is not None:
+            return fitz.Rect(page_rect)
+        if planned:
+            union = fitz.Rect(planned[0][0])
+            for rect, *_ in planned[1:]:
+                union |= rect
+            return union
+        return fitz.Rect(0, 0, 0, 0)

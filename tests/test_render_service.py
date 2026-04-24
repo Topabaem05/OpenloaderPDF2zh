@@ -786,12 +786,21 @@ def test_render_service_pretext_uses_pymupdf_probe_to_reject_original_typography
         block,
         planned_rect,
         measurement,
+        page_rect,
         render_font_family,
         render_css,
         render_archive,
         fit_cache=None,
     ):
-        _ = (block, planned_rect, render_font_family, render_css, render_archive, fit_cache)
+        _ = (
+            block,
+            planned_rect,
+            page_rect,
+            render_font_family,
+            render_css,
+            render_archive,
+            fit_cache,
+        )
         letter_spacing = measurement.get("letter_spacing_em")
         resolved_spacing = (
             None if letter_spacing is None else float(letter_spacing)
