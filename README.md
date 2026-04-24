@@ -1,9 +1,9 @@
 # OpenPDF2ZH Workbench
 
-파싱 백테스트(OpenPDF2ZH 12페이지 약 1초, PDF2zh 1페이지 warm run 10.89초)를 바탕으로, 빠른 파싱과 Gradio UI 조작 흐름에 초점을 맞춘 1920×1080 가이드 영상입니다.
+This 1920x1080 guide video focuses on fast parsing and the Gradio UI flow, based on a parsing backtest: OpenPDF2ZH parsed 12 pages in about 1 second, while a PDF2zh warm run took 10.89 seconds for 1 page.
 
 <p align="center">
-  <strong>OpenPDF2ZH 가이드: 빠른 파싱 + Gradio UI 조작 (Apple 스타일 모션)</strong>
+  <strong>OpenPDF2ZH Guide: fast parsing + Gradio UI flow (Apple-style motion)</strong>
 </p>
 
 <p align="center">

@@ -13,14 +13,14 @@ const H = 1080;
 const FRAME_RATE = 30;
 
 const sections = [
-  {id: "01", title: "OpenPDF2ZH Workbench", subtitle: "PDF 번역과 레이아웃 복원을 하나의 워크벤치로"},
-  {id: "02", title: "Parsing Backtest", subtitle: "PDF2zh 대비 빠르게 끝나는 첫 단계"},
-  {id: "03", title: "Pipeline", subtitle: "업로드부터 결과 PDF까지 한 흐름으로"},
-  {id: "04", title: "Project Structure", subtitle: "Gradio와 FastAPI를 잇는 Python 중심 구조"},
-  {id: "05", title: "Quick Start", subtitle: "Docker로 바로 실행"},
-  {id: "06", title: "Gradio UI", subtitle: "업로드, 설정, 실행, 다운로드만 보여주기"},
-  {id: "07", title: "Strengths", subtitle: "MVP에서 바로 보이는 장점"},
-  {id: "08", title: "Next Steps", subtitle: "README, 샘플 결과, 벤치마크 확장"},
+  {id: "01", title: "OpenPDF2ZH Workbench", subtitle: "Translate PDFs and preserve layout in one workbench"},
+  {id: "02", title: "Parsing Backtest", subtitle: "The first step finishes faster than PDF2zh"},
+  {id: "03", title: "Pipeline", subtitle: "From upload to translated PDF in one flow"},
+  {id: "04", title: "Project Structure", subtitle: "A Python-first structure connecting Gradio and FastAPI"},
+  {id: "05", title: "Quick Start", subtitle: "Run locally with Docker"},
+  {id: "06", title: "Gradio UI", subtitle: "Upload, configure, run, and download"},
+  {id: "07", title: "Strengths", subtitle: "The MVP has a clear product flow"},
+  {id: "08", title: "Next Steps", subtitle: "Keep adding README assets, sample outputs, and benchmarks"},
   {id: "09", title: "Wrap Up", subtitle: "clone, run, translate"},
 ];
 
@@ -155,7 +155,7 @@ const Section01 = ({frame}: {frame: number}) => {
   const arrow = ease(frame, 46, 40);
   return (
     <Shell frame={frame} index={0}>
-      <TitleBlock frame={frame} title="Workbench for PDFs" subtitle="번역보다 먼저, 파싱 대기 시간을 줄입니다" />
+      <TitleBlock frame={frame} title="Workbench for PDFs" subtitle="Reduce parsing wait time before translation starts" />
       <FadeUp frame={frame} start={24}>
         <DocumentCard x={430} y={410} label="source.pdf" color="#111" />
       </FadeUp>
@@ -175,18 +175,42 @@ const Section01 = ({frame}: {frame: number}) => {
   );
 };
 
-const Bar = ({x, y, width, value, color, label, time}: {x: number; y: number; width: number; value: number; color: string; label: string; time: string}) => (
-  <g>
-    <text x={x} y={y - 20} fontSize={27} fontWeight={760} fill="#111">
+const VerticalBar = ({
+  x,
+  baseline,
+  maxHeight,
+  value,
+  color,
+  label,
+  time,
+  delay,
+  frame,
+}: {
+  x: number;
+  baseline: number;
+  maxHeight: number;
+  value: number;
+  color: string;
+  label: string;
+  time: string;
+  delay: number;
+  frame: number;
+}) => {
+  const p = ease(frame, delay, 28);
+  const height = maxHeight * value * p;
+  return (
+    <g>
+      <rect x={x - 78} y={baseline - maxHeight} width={156} height={maxHeight} rx={30} fill="#e5e5ea" />
+      <rect x={x - 78} y={baseline - height} width={156} height={height} rx={30} fill={color} />
+      <text x={x} y={baseline - height - 30} textAnchor="middle" fontSize={40} fontWeight={860} fill={color} opacity={p}>
+        {time}
+      </text>
+      <text x={x} y={baseline + 52} textAnchor="middle" fontSize={27} fontWeight={760} fill="#111">
       {label}
-    </text>
-    <rect x={x} y={y} width={width} height={38} rx={19} fill="#e5e5ea" />
-    <rect x={x} y={y} width={width * value} height={38} rx={19} fill={color} />
-    <text x={x + width + 28} y={y + 29} fontSize={34} fontWeight={820} fill={color}>
-      {time}
-    </text>
-  </g>
-);
+      </text>
+    </g>
+  );
+};
 
 const Section02 = ({frame}: {frame: number}) => {
   const open = ease(frame, 36, 36);
@@ -194,9 +218,9 @@ const Section02 = ({frame}: {frame: number}) => {
   const number = Math.round(interpolate(open, [0, 1], [0, 12]));
   return (
     <Shell frame={frame} index={1}>
-      <TitleBlock frame={frame} title="Parsing first." subtitle="백테스트 수치가 보여준 차이" y={220} />
+      <TitleBlock frame={frame} title="Parsing first." subtitle="Backtest data makes the gap visible" y={220} />
       <FadeUp frame={frame} start={24}>
-        <rect x={270} y={395} width={1380} height={330} rx={44} fill="#fff" filter="url(#soft-1)" />
+        <rect x={270} y={375} width={1380} height={560} rx={44} fill="#fff" filter="url(#soft-1)" />
         <text x={350} y={475} fontSize={28} fill="#6e6e73">
           Local parsing backtest snapshot
         </text>
@@ -208,12 +232,35 @@ const Section02 = ({frame}: {frame: number}) => {
         </text>
       </FadeUp>
       <FadeUp frame={frame} start={44}>
-        <Bar x={350} y={780} width={880} value={open} color="#0071e3" label="OpenPDF2ZH parser" time="~1s / 12p" />
-        <Bar x={350} y={875} width={880} value={pdf2zh * 0.72} color="#86868b" label="PDF2zh warm run" time="10.89s / 1p" />
+        <g>
+          <line x1={690} y1={878} x2={1268} y2={878} stroke="#d2d2d7" strokeWidth={3} />
+          <VerticalBar
+            x={790}
+            baseline={878}
+            maxHeight={148}
+            value={open * 0.18}
+            color="#0071e3"
+            label="OpenPDF2ZH"
+            time="~1s / 12p"
+            delay={44}
+            frame={frame}
+          />
+          <VerticalBar
+            x={1165}
+            baseline={878}
+            maxHeight={148}
+            value={pdf2zh}
+            color="#86868b"
+            label="PDF2zh warm run"
+            time="10.89s / 1p"
+            delay={58}
+            frame={frame}
+          />
+        </g>
       </FadeUp>
       <FadeUp frame={frame} start={94}>
-        <text x={1390} y={870} textAnchor="middle" fontSize={54} fontWeight={860} fill="#111">
-          less waiting
+        <text x={1430} y={840} textAnchor="middle" fontSize={48} fontWeight={860} fill="#111">
+          less waiting.
         </text>
       </FadeUp>
     </Shell>
@@ -224,7 +271,7 @@ const pipeline = ["Upload", "Parse", "Translate", "Layout", "PDF"];
 
 const Section03 = ({frame}: {frame: number}) => (
   <Shell frame={frame} index={2}>
-    <TitleBlock frame={frame} title="One continuous pipeline" subtitle="사용자는 버튼 하나로 흐름을 따라갑니다" y={225} />
+    <TitleBlock frame={frame} title="One continuous pipeline" subtitle="A single action moves through the full workflow" y={225} />
     <g transform="translate(245 575)">
       <line x1={0} y1={0} x2={1430} y2={0} stroke="#d2d2d7" strokeWidth={10} strokeLinecap="round" />
       {pipeline.map((item, i) => {
@@ -245,7 +292,7 @@ const Section03 = ({frame}: {frame: number}) => (
     </g>
     <FadeUp frame={frame} start={94}>
       <text x={W / 2} y={895} textAnchor="middle" fontSize={42} fontWeight={820} fill="#111">
-        파싱이 빨라지면 전체 경험이 먼저 가벼워집니다.
+        Faster parsing makes the entire experience feel lighter.
       </text>
     </FadeUp>
   </Shell>
@@ -253,7 +300,7 @@ const Section03 = ({frame}: {frame: number}) => (
 
 const Section04 = ({frame}: {frame: number}) => (
   <Shell frame={frame} index={3}>
-    <TitleBlock frame={frame} title="Clear Python structure" subtitle="UI, pipeline, services가 역할별로 분리됩니다" y={210} />
+    <TitleBlock frame={frame} title="Clear Python structure" subtitle="UI, pipeline, and services stay separated by role" y={210} />
     <FadeUp frame={frame} start={26}>
       <rect x={548} y={365} width={824} height={500} rx={38} fill="#111" filter="url(#soft-3)" />
       {["app.py", "src/openpdf2zh/ui.py", "src/openpdf2zh/pipeline.py", "services/parser_service.py", "services/render_service.py"].map((item, i) => (
@@ -299,7 +346,7 @@ const Section06 = ({frame}: {frame: number}) => {
   const progress = interpolate(ease(frame, 96, 34), [0, 1], [0.08, 0.94]);
   return (
     <Shell frame={frame} index={5}>
-      <TitleBlock frame={frame} title="Gradio, only the controls" subtitle="설명 박스 없이 UI 조작만 집중" y={155} />
+      <TitleBlock frame={frame} title="Gradio, only the controls" subtitle="No side explanation box. Just the UI flow." y={155} />
       <FadeUp frame={frame} start={22}>
         <rect x={190} y={285} width={1540} height={670} rx={42} fill="#fff" stroke="#d2d2d7" filter="url(#soft-5)" />
         <text x={260} y={365} fontSize={34} fontWeight={820} fill="#111">
@@ -362,7 +409,7 @@ const strengths = ["Fast parse", "Gradio-first", "Docker start", "Local models",
 
 const Section07 = ({frame}: {frame: number}) => (
   <Shell frame={frame} index={6}>
-    <TitleBlock frame={frame} title="What works well" subtitle="작게 시작해도 제품 흐름은 선명합니다" y={220} />
+    <TitleBlock frame={frame} title="What works well" subtitle="Even the MVP has a clear product flow" y={220} />
     <g transform="translate(230 475)">
       {strengths.map((item, i) => {
         const p = clamp(s(frame, 30 + i * 9));
@@ -384,7 +431,7 @@ const Section07 = ({frame}: {frame: number}) => (
 
 const Section08 = ({frame}: {frame: number}) => (
   <Shell frame={frame} index={7}>
-    <TitleBlock frame={frame} title="Next, measure more" subtitle="샘플 결과와 벤치마크를 README에 계속 누적" y={220} />
+    <TitleBlock frame={frame} title="Next, measure more" subtitle="Keep adding sample outputs and benchmark runs to the README" y={220} />
     <FadeUp frame={frame} start={28}>
       {[
         ["README video", "done"],
