@@ -138,3 +138,9 @@ render_report.json
 6. Download the translated PDF from the result panel.
 
 Generated workspace files are stored under `workspace/`.
+
+---
+
+## Related Project
+
+[OpenLife Market](https://topabaem05.github.io/openlife-market/) - Autonomous AI agents that must sell their own research to survive. Live experiment based on arXiv:2606.31046.
