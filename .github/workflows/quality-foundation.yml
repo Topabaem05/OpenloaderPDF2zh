@@ -42,6 +42,7 @@ jobs:
           src/openpdf2zh/services/protection_service.py
           src/openpdf2zh/services/redaction_service.py
           src/openpdf2zh/services/safe_render_service.py
+          src/openpdf2zh/services/translation_cache.py
           tests/helpers
           tests/test_document_ir.py
           tests/test_document_builder.py

@@ -91,6 +91,10 @@ def _default_rate_limit_storage_path(workspace_root: Path) -> str:
     return str((workspace_root / "service_state" / "quota.sqlite3").resolve())
 
 
+def _default_translation_cache_path(workspace_root: Path) -> str:
+    return str((workspace_root / "service_state" / "translation_cache.sqlite3").resolve())
+
+
 @dataclass(slots=True)
 class AppSettings:
     host: str = "127.0.0.1"
@@ -120,6 +124,8 @@ class AppSettings:
     ctranslate2_tokenizer_path: str = ""
     openrouter_api_base_url: str = OPENROUTER_API_BASE_URL
     glossary_path: str = ""
+    translation_cache_enabled: bool = True
+    translation_cache_path: str = ""
 
     @property
     def public_root(self) -> Path:
@@ -238,4 +244,12 @@ class AppSettings:
             ).strip()
             or OPENROUTER_API_BASE_URL,
             glossary_path=os.getenv("OPENPDF2ZH_GLOSSARY_PATH", "").strip(),
+            translation_cache_enabled=_as_bool(
+                os.getenv("OPENPDF2ZH_TRANSLATION_CACHE_ENABLED"),
+                default=True,
+            ),
+            translation_cache_path=(
+                os.getenv("OPENPDF2ZH_TRANSLATION_CACHE_PATH", "").strip()
+                or _default_translation_cache_path(workspace_root)
+            ),
         )

@@ -8,6 +8,8 @@ from typing import Any
 from openpdf2zh.document.ir import DocumentIR, DocumentRun, ParagraphIR
 from openpdf2zh.document.serialization import read_document_ir
 from openpdf2zh.models import JobWorkspace, PipelineRequest, TranslationUnit
+from openpdf2zh.providers.base import BaseTranslator
+from openpdf2zh.services.translation_cache import TranslationCache
 from openpdf2zh.services.translation_service import TranslationService
 from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.translation.context import TranslationContextBuilder
@@ -23,6 +25,7 @@ class ContextTranslationService(TranslationService):
         super().__init__(settings)
         self.context_builder = TranslationContextBuilder()
         self.glossary = self._load_configured_glossary()
+        self.translation_cache = self._load_translation_cache()
 
     def set_glossary(self, glossary: Glossary) -> None:
         self.glossary = glossary
@@ -38,6 +41,17 @@ class ContextTranslationService(TranslationService):
                 "Check OPENPDF2ZH_GLOSSARY_PATH."
             )
         return Glossary.from_csv(path)
+
+    def _load_translation_cache(self) -> TranslationCache | None:
+        if not self.settings.translation_cache_enabled:
+            return None
+        configured = self.settings.translation_cache_path.strip()
+        path = (
+            Path(configured).expanduser()
+            if configured
+            else self.settings.workspace_root / "service_state" / "translation_cache.sqlite3"
+        )
+        return TranslationCache(path)
 
     def translate_document(
         self,
@@ -69,9 +83,13 @@ class ContextTranslationService(TranslationService):
         )
         translated_texts: list[str] = []
         current = {"translated": 0, "total": total}
+        cache_hits = 0
 
         def heartbeat_context() -> str:
-            return f"current={current['translated']}/{current['total']}"
+            return (
+                f"current={current['translated']}/{current['total']} "
+                f"cache_hits={cache_hits}"
+            )
 
         with run_log_heartbeat(
             workspace.run_log,
@@ -81,19 +99,13 @@ class ContextTranslationService(TranslationService):
             for start in range(0, total, self.BATCH_SIZE):
                 self._check_quota(quota_guard)
                 batch = requests[start : start + self.BATCH_SIZE]
-                results = translator.translate_many(batch, model=request.model)
-                if len(results) != len(batch):
-                    raise RuntimeError(
-                        "Translation provider returned a different number of results "
-                        f"than requested: expected {len(batch)}, got {len(results)}."
-                    )
-                for item, translated in zip(batch, results, strict=True):
-                    sanitized = self._sanitize_translated_text(str(translated)).strip()
-                    if not sanitized:
-                        raise RuntimeError(
-                            f"Translation provider returned empty text for {item.segment_id}."
-                        )
-                    translated_texts.append(sanitized)
+                results, batch_cache_hits = self._translate_batch_with_cache(
+                    translator,
+                    batch,
+                    request,
+                )
+                cache_hits += batch_cache_hits
+                translated_texts.extend(results)
                 current["translated"] = min(start + len(batch), total)
                 if progress is not None:
                     progress_value = 0.35 + (
@@ -115,6 +127,7 @@ class ContextTranslationService(TranslationService):
             structured = self._build_structured_payload(workspace, request, units)
             structured["schema_version"] = 2
             structured["document_ir"] = "parsed/document_ir.json"
+            structured["translation_cache_hits"] = cache_hits
             write_json(workspace.structured_json, structured)
             workspace.translated_markdown.write_text(
                 self._build_markdown(units),
@@ -128,9 +141,70 @@ class ContextTranslationService(TranslationService):
             )
             append_run_log(
                 workspace.run_log,
-                f"translation=document_ir:done units={len(units)}",
+                f"translation=document_ir:done units={len(units)} cache_hits={cache_hits}",
             )
             return units
+
+    def _translate_batch_with_cache(
+        self,
+        translator: BaseTranslator,
+        batch: list[TranslationRequestItem],
+        request: PipelineRequest,
+    ) -> tuple[list[str], int]:
+        resolved: list[str | None] = [None] * len(batch)
+        missing_items: list[TranslationRequestItem] = []
+        missing_indexes: list[int] = []
+        cache_hits = 0
+
+        for index, item in enumerate(batch):
+            cached = None
+            if self.translation_cache is not None:
+                cached = self.translation_cache.get(
+                    item,
+                    provider=request.provider,
+                    model=request.model,
+                )
+            if cached is None:
+                missing_items.append(item)
+                missing_indexes.append(index)
+                continue
+            resolved[index] = cached
+            cache_hits += 1
+
+        if missing_items:
+            fresh_results = translator.translate_many(
+                missing_items,
+                model=request.model,
+            )
+            if len(fresh_results) != len(missing_items):
+                raise RuntimeError(
+                    "Translation provider returned a different number of results "
+                    f"than requested: expected {len(missing_items)}, "
+                    f"got {len(fresh_results)}."
+                )
+            for original_index, item, translated in zip(
+                missing_indexes,
+                missing_items,
+                fresh_results,
+                strict=True,
+            ):
+                sanitized = self._sanitize_translated_text(str(translated)).strip()
+                if not sanitized:
+                    raise RuntimeError(
+                        f"Translation provider returned empty text for {item.segment_id}."
+                    )
+                resolved[original_index] = sanitized
+                if self.translation_cache is not None:
+                    self.translation_cache.put(
+                        item,
+                        provider=request.provider,
+                        model=request.model,
+                        translated_text=sanitized,
+                    )
+
+        if any(value is None for value in resolved):
+            raise RuntimeError("Translation batch could not be fully resolved.")
+        return [str(value) for value in resolved], cache_hits
 
     def _build_run_index(
         self,
