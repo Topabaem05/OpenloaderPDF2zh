@@ -44,6 +44,7 @@ class JobWorkspace:
     logs_dir: Path
     raw_json: Path
     raw_markdown: Path
+    document_ir_json: Path
     structured_json: Path
     translated_markdown: Path
     translated_pdf: Path
