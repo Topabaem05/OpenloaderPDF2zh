@@ -29,6 +29,8 @@ jobs:
         run: >-
           python -m ruff check
           src/openpdf2zh/document
+          src/openpdf2zh/translation
+          src/openpdf2zh/providers/base.py
           src/openpdf2zh/services/document_builder.py
           src/openpdf2zh/services/pdf_structure_service.py
           src/openpdf2zh/services/parser_service.py
@@ -42,6 +44,9 @@ jobs:
           tests/test_parser_service.py
           tests/test_protection_service.py
           tests/test_redaction_service.py
+          tests/test_translation_context.py
+          tests/test_glossary.py
+          tests/test_base_translator_batch.py
           tools/quality
 
       - name: Test
