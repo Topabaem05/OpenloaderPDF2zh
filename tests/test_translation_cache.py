@@ -7,6 +7,7 @@ from openpdf2zh.translation.contracts import TranslationRequestItem
 
 def _item(
     *,
+    paragraph_text: str = "The boundary layer grows downstream.",
     previous_text: str = "Previous paragraph",
     glossary: dict[str, str] | None = None,
 ) -> TranslationRequestItem:
@@ -15,6 +16,7 @@ def _item(
         text="The boundary layer grows.",
         target_language="Korean",
         section_title="Boundary Layer",
+        paragraph_text=paragraph_text,
         previous_text=previous_text,
         next_text="Transition follows.",
         glossary=glossary or {"boundary layer": "경계층"},
@@ -48,11 +50,17 @@ def test_translation_cache_key_changes_with_context_and_glossary(tmp_path: Path)
 
     cache = TranslationCache(tmp_path / "translations.sqlite3")
     base = _item()
+    changed_paragraph = _item(paragraph_text="Different current paragraph")
     changed_context = _item(previous_text="Different previous paragraph")
     changed_glossary = _item(glossary={"boundary layer": "경계 레이어"})
 
     keys = {
         cache.key_for(base, provider="openrouter", model="test-model"),
+        cache.key_for(
+            changed_paragraph,
+            provider="openrouter",
+            model="test-model",
+        ),
         cache.key_for(
             changed_context,
             provider="openrouter",
@@ -65,7 +73,7 @@ def test_translation_cache_key_changes_with_context_and_glossary(tmp_path: Path)
         ),
     }
 
-    assert len(keys) == 3
+    assert len(keys) == 4
 
 
 def test_translation_cache_key_changes_with_provider_model_and_target(
@@ -80,6 +88,7 @@ def test_translation_cache_key_changes_with_provider_model_and_target(
         text=item.text,
         target_language="Japanese",
         section_title=item.section_title,
+        paragraph_text=item.paragraph_text,
         previous_text=item.previous_text,
         next_text=item.next_text,
         glossary=item.glossary,

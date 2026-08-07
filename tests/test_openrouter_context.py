@@ -26,6 +26,7 @@ def test_openrouter_translate_many_sends_context_and_glossary(monkeypatch) -> No
         text="It grows downstream.",
         target_language="Korean",
         section_title="Boundary Layer",
+        paragraph_text="The boundary layer grows downstream and then transitions.",
         previous_text="The boundary layer begins near the leading edge.",
         next_text="Transition follows.",
         glossary={"boundary layer": "경계층"},
@@ -36,6 +37,10 @@ def test_openrouter_translate_many_sends_context_and_glossary(monkeypatch) -> No
     assert result == ["경계층이 성장한다."]
     prompt = captured[0]["messages"][1]["content"]
     assert "Section title: Boundary Layer" in prompt
+    assert (
+        "Current paragraph: The boundary layer grows downstream and then transitions."
+        in prompt
+    )
     assert "Previous paragraph:" in prompt
     assert "Next paragraph: Transition follows." in prompt
     assert "boundary layer => 경계층" in prompt

@@ -88,6 +88,7 @@ def test_context_builder_masks_protected_runs_and_preserves_context() -> None:
 
     paragraph = next(item for item in items if item.segment_id == "p-one")
     assert paragraph.section_title == "Boundary Layer"
+    assert paragraph.paragraph_text == "The relation Cp = (p-p∞)/q∞ is used here."
     assert paragraph.previous_text == "Boundary Layer"
     assert paragraph.next_text == "It grows downstream."
     assert "Cp = (p-p∞)/q∞" not in paragraph.text
@@ -107,6 +108,7 @@ def test_context_builder_build_runs_skips_protected_formula() -> None:
     assert "Cp = (p-p∞)/q∞" not in texts
     body = next(item for item in items if item.segment_id == "r-one-b")
     assert body.section_title == "Boundary Layer"
+    assert body.paragraph_text == "The relation Cp = (p-p∞)/q∞ is used here."
     assert body.previous_text == "Boundary Layer"
     assert body.next_text == "It grows downstream."
 
