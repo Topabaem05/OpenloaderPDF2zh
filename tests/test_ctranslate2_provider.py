@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from openpdf2zh.providers.ctranslate2 import CTranslate2Translator
+from openpdf2zh.translation.contracts import TranslationRequestItem
 
 
 class _FakeResult:
@@ -15,11 +16,13 @@ class _FakeTranslator:
         self.tokens = tokens
         self.batch: list[list[str]] | None = None
         self.target_prefix: list[list[str]] | None = None
+        self.call_count = 0
 
     def translate_batch(self, batch: list[list[str]], **kwargs: object) -> list[_FakeResult]:
+        self.call_count += 1
         self.batch = batch
         self.target_prefix = kwargs.get("target_prefix")  # type: ignore[assignment]
-        return [_FakeResult(self.tokens)]
+        return [_FakeResult(list(self.tokens)) for _ in batch]
 
 
 class _FakeSentencePieceTokenizer:
@@ -112,6 +115,43 @@ def test_sentencepiece_multilingual_backend_is_used_when_external_tokenizer_is_c
     assert fake_translator.batch == [["eng_Latn", "hello", "world"]]
     assert fake_translator.target_prefix == [["kor_Hang"]]
     assert fake_tokenizer.decoded_tokens == [["tok_x", "tok_y"]]
+
+
+def test_translate_many_uses_single_multilingual_translate_batch_call(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    tokenizer_path = tmp_path / "tokenizer.model"
+    tokenizer_path.write_text("stub", encoding="utf-8")
+    fake_tokenizer = _FakeSentencePieceTokenizer()
+    fake_translator = _FakeTranslator(["kor_Hang", "tok_x", "tok_y"])
+    monkeypatch.setattr(
+        "openpdf2zh.providers.ctranslate2.spm.SentencePieceProcessor",
+        lambda model_file: fake_tokenizer,
+    )
+
+    translator = CTranslate2Translator(str(model_dir), str(tokenizer_path))
+    monkeypatch.setattr(
+        translator,
+        "_ensure_multilingual_translator",
+        lambda: fake_translator,
+    )
+    items = [
+        TranslationRequestItem("r1", "First sentence", "Korean"),
+        TranslationRequestItem("r2", "Second sentence", "Korean"),
+    ]
+
+    translated = translator.translate_many(items, model="auto")
+
+    assert translated == ["sentencepiece-decoded", "sentencepiece-decoded"]
+    assert fake_translator.call_count == 1
+    assert fake_translator.batch == [
+        ["eng_Latn", "hello", "world"],
+        ["eng_Latn", "hello", "world"],
+    ]
+    assert fake_translator.target_prefix == [["kor_Hang"], ["kor_Hang"]]
 
 
 def test_nllb_assets_enable_transformers_multilingual_backend_without_external_tokenizer(
