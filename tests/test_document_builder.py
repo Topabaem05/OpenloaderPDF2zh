@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pymupdf as fitz
 
-from tests.helpers.pdf_factory import make_rich_text_pdf
+from tests.helpers.pdf_factory import make_rich_text_pdf, make_vector_table_pdf
 
 
 def test_document_builder_module_exists() -> None:
@@ -112,6 +112,42 @@ def test_builder_prefers_specific_protected_region_over_broad_paragraph(
     assert len(bold_runs) == 1
     assert bold_runs[0].translatable is False
     assert bold_runs[0].protection_reason == "semantic_figure"
+
+
+def test_builder_promotes_native_table_cells_inside_semantic_table(tmp_path: Path) -> None:
+    from openpdf2zh.services.document_builder import DocumentBuilder
+    from openpdf2zh.services.pdf_structure_service import PdfStructureService
+
+    pdf = make_vector_table_pdf(tmp_path / "table.pdf")
+    native = PdfStructureService().extract(pdf)
+    page = native.pages[0]
+    table = page.tables[0]
+    payload = {
+        "elements": [
+            {
+                "type": "table",
+                "page number": 1,
+                "bounding box": _to_parser_bbox(page.height, fitz.Rect(table.bbox)),
+                "content": "Velocity 200 m/s Pressure 101 kPa",
+            }
+        ]
+    }
+
+    document = DocumentBuilder().build_from_structure(native, payload)
+    table_paragraphs = [
+        paragraph
+        for paragraph in document.pages[0].paragraphs
+        if paragraph.label == "table cell"
+    ]
+    translated_text = {
+        run.text.strip()
+        for paragraph in table_paragraphs
+        for run in paragraph.runs
+        if run.translatable and run.text.strip()
+    }
+
+    assert translated_text == {"Velocity", "200 m/s", "Pressure", "101 kPa"}
+    assert len(table_paragraphs) == 4
 
 
 def test_builder_keeps_page_geometry_and_reading_order(tmp_path: Path) -> None:
