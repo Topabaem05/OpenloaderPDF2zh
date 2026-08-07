@@ -150,3 +150,39 @@ def test_build_document_ir_writes_rich_parser_artifact(tmp_path: Path) -> None:
     restored = read_document_ir(result_path)
     assert restored.pages[0].paragraphs[0].label == "paragraph"
     assert "Hello document IR" in restored.pages[0].paragraphs[0].original_text
+
+
+def test_build_document_ir_protects_inline_formula(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sentence = "The relation Cp = (p-p0)/q0 is used here."
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), sentence, fontsize=11)
+    document.save(workspace.input_pdf)
+    document.close()
+
+    workspace.raw_json.write_text(
+        json.dumps(
+            {
+                "elements": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "bounding box": [0, 0, 400, 300],
+                        "content": sentence,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ParserService(AppSettings())._build_document_ir(workspace)
+    restored = read_document_ir(workspace.document_ir_json)
+    runs = restored.pages[0].paragraphs[0].runs
+
+    formula = next(run for run in runs if run.kind == "formula")
+    assert formula.text == "Cp = (p-p0)/q0"
+    assert formula.translatable is False
+    assert formula.protection_reason == "formula"
+    assert "".join(run.text for run in runs) == sentence
