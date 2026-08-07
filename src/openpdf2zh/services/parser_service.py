@@ -8,14 +8,16 @@ from pathlib import Path
 import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
+from openpdf2zh.document.serialization import write_document_ir
 from openpdf2zh.models import JobWorkspace, PipelineRequest
+from openpdf2zh.services.document_builder import DocumentBuilder
 from openpdf2zh.services.usage_quota import QuotaLease
-from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 from openpdf2zh.utils.files import (
     append_run_log,
     copy_first_matching,
     run_log_heartbeat,
 )
+from openpdf2zh.utils.geometry import bbox_area, bbox_area_ratio, bbox_iom, bbox_iou
 
 
 class ParserService:
@@ -23,6 +25,7 @@ class ParserService:
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
+        self.document_builder = DocumentBuilder()
 
     def parse(
         self,
@@ -58,7 +61,7 @@ class ParserService:
                     format="json,markdown",
                     hybrid="off",
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"OpenDataLoader parsing failed: {exc}") from exc
 
             append_run_log(workspace.run_log, "parser=convert:done")
@@ -69,9 +72,13 @@ class ParserService:
                 workspace.parsed_dir, workspace.raw_markdown, [".md", ".markdown"]
             )
             append_run_log(workspace.run_log, "parser=artifacts:done")
+
+            self._check_quota(quota_guard)
+            self._build_document_ir(workspace)
+
             try:
                 self._build_detected_boxes_preview(workspace)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 warning_message = (
                     "Detected text boxes preview could not be generated. "
                     "Translation will continue without the parser box preview."
@@ -86,6 +93,16 @@ class ParserService:
         if quota_guard is None:
             return
         quota_guard.raise_if_expired()
+
+    def _build_document_ir(self, workspace: JobWorkspace) -> Path:
+        payload = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
+        document = self.document_builder.build(workspace.input_pdf, payload)
+        write_document_ir(workspace.document_ir_json, document)
+        append_run_log(
+            workspace.run_log,
+            f"parser=document_ir {workspace.document_ir_json}",
+        )
+        return workspace.document_ir_json
 
     def _build_detected_boxes_preview(self, workspace: JobWorkspace) -> Path:
         payload = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
