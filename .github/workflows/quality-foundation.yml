@@ -60,6 +60,7 @@ jobs:
           tests/test_base_translator_batch.py
           tests/test_ctranslate2_provider.py
           tests/test_openrouter_context.py
+          tests/test_openrouter_concurrency.py
           tools/quality
 
       - name: Test
