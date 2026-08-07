@@ -31,11 +31,15 @@ jobs:
           src/openpdf2zh/document
           src/openpdf2zh/services/document_builder.py
           src/openpdf2zh/services/pdf_structure_service.py
+          src/openpdf2zh/services/parser_service.py
+          src/openpdf2zh/services/protection_service.py
           tests/helpers
           tests/test_document_ir.py
           tests/test_document_builder.py
           tests/test_pdf_structure_service.py
           tests/test_pdf_quality_regression.py
+          tests/test_parser_service.py
+          tests/test_protection_service.py
           tools/quality
 
       - name: Test
