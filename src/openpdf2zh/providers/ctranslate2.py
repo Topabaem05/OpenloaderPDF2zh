@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import ctranslate2
 import sentencepiece as spm
@@ -14,12 +14,12 @@ from openpdf2zh.translation.contracts import TranslationRequestItem
 
 class CTranslate2Translator(BaseTranslator):
     MIN_TRANSFORMERS_MULTILINGUAL_CTRANSLATE2_VERSION = (4, 7, 1)
-    DIRECTIONAL_MODEL_DIRS = {
+    DIRECTIONAL_MODEL_DIRS: ClassVar[dict[str, str]] = {
         "English": "quickmt-ko-en",
         "Korean": "quickmt-en-ko",
     }
     SUPPORTED_DIRECTIONAL_TARGET_LANGUAGES = frozenset(DIRECTIONAL_MODEL_DIRS)
-    TARGET_LANGUAGE_TAGS = {
+    TARGET_LANGUAGE_TAGS: ClassVar[dict[str, str]] = {
         "English": "eng_Latn",
         "Korean": "kor_Hang",
         "Japanese": "jpn_Jpan",
