@@ -8,6 +8,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from openpdf2zh.providers.base import BaseTranslator
+from openpdf2zh.translation.contracts import TranslationRequestItem
 
 
 class OpenRouterTranslator(BaseTranslator):
@@ -15,8 +16,10 @@ class OpenRouterTranslator(BaseTranslator):
     RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
     SYSTEM_PROMPT = (
         "You are a translation engine for PDF text extraction. "
-        "Translate the user text into the requested language. "
+        "Translate only the text explicitly marked as the text to translate. "
+        "Use surrounding context only to resolve meaning and terminology. "
         "Preserve meaning, list markers, numbering, and line breaks when possible. "
+        "Obey required terminology exactly. "
         "Return only the translated text."
     )
 
@@ -34,6 +37,24 @@ class OpenRouterTranslator(BaseTranslator):
             raise RuntimeError("OpenRouter API base URL is required.")
 
     def translate(self, text: str, *, target_language: str, model: str) -> str:
+        return self._translate_item(
+            TranslationRequestItem(
+                segment_id="single",
+                text=text,
+                target_language=target_language,
+            ),
+            model=model,
+        )
+
+    def translate_many(
+        self,
+        items: list[TranslationRequestItem],
+        *,
+        model: str,
+    ) -> list[str]:
+        return [self._translate_item(item, model=model) for item in items]
+
+    def _translate_item(self, item: TranslationRequestItem, *, model: str) -> str:
         payload = {
             "model": model,
             "temperature": 0,
@@ -41,11 +62,7 @@ class OpenRouterTranslator(BaseTranslator):
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": (
-                        f"Target language: {target_language}\n"
-                        "Translate the following text exactly once.\n\n"
-                        f"{text}"
-                    ),
+                    "content": self._build_user_prompt(item),
                 },
             ],
         }
@@ -71,14 +88,60 @@ class OpenRouterTranslator(BaseTranslator):
             raise RuntimeError("OpenRouter returned an empty translation.")
         return translated.strip()
 
+    def _build_user_prompt(self, item: TranslationRequestItem) -> str:
+        chunks = [
+            f"Target language: {item.target_language}",
+            "Translate the following text exactly once.",
+        ]
+        context_lines: list[str] = []
+        if item.section_title:
+            context_lines.append(f"Section title: {item.section_title}")
+        if item.previous_text:
+            context_lines.append(f"Previous paragraph: {item.previous_text}")
+        if item.next_text:
+            context_lines.append(f"Next paragraph: {item.next_text}")
+        if context_lines:
+            chunks.extend(
+                [
+                    "",
+                    "Context for disambiguation only; do not return this context:",
+                    *context_lines,
+                ]
+            )
+        if item.glossary:
+            chunks.extend(
+                [
+                    "",
+                    "Required terminology:",
+                    *[
+                        f"- {source} => {target}"
+                        for source, target in item.glossary.items()
+                    ],
+                ]
+            )
+        if item.protected_tokens:
+            chunks.extend(
+                [
+                    "",
+                    "Preserve these protected tokens exactly, including brackets and case:",
+                    *[f"- {token}" for token in item.protected_tokens],
+                ]
+            )
+        chunks.extend(
+            [
+                "",
+                "Text to translate:",
+                item.text,
+            ]
+        )
+        return "\n".join(chunks)
+
     def _execute_request(self, request: urllib_request.Request) -> str:
         last_error: BaseException | None = None
 
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             try:
-                with urllib_request.urlopen(
-                    request,
-                ) as response:
+                with urllib_request.urlopen(request) as response:
                     return response.read().decode("utf-8")
             except urllib_error.HTTPError as exc:
                 last_error = exc
