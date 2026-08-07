@@ -11,6 +11,7 @@ from openpdf2zh.config import AppSettings
 from openpdf2zh.document.serialization import write_document_ir
 from openpdf2zh.models import JobWorkspace, PipelineRequest
 from openpdf2zh.services.document_builder import DocumentBuilder
+from openpdf2zh.services.protection_service import ProtectionService
 from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import (
     append_run_log,
@@ -26,6 +27,7 @@ class ParserService:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.document_builder = DocumentBuilder()
+        self.protection = ProtectionService()
 
     def parse(
         self,
@@ -97,6 +99,7 @@ class ParserService:
     def _build_document_ir(self, workspace: JobWorkspace) -> Path:
         payload = json.loads(workspace.raw_json.read_text(encoding="utf-8"))
         document = self.document_builder.build(workspace.input_pdf, payload)
+        document = self.protection.protect_document(document)
         write_document_ir(workspace.document_ir_json, document)
         append_run_log(
             workspace.run_log,
