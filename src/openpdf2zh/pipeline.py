@@ -8,7 +8,7 @@ import pymupdf as fitz
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest, PipelineResult
 from openpdf2zh.services.parser_service import ParserService
-from openpdf2zh.services.render_service import RenderService
+from openpdf2zh.services.safe_render_service import SafeRenderService as RenderService
 from openpdf2zh.services.translation_service import TranslationService
 from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import append_run_log, prepare_workspace
@@ -56,6 +56,7 @@ class PipelineRunner:
         append_run_log(workspace.run_log, "phase=parse:done")
         append_run_log(workspace.run_log, f"raw_json={workspace.raw_json}")
         append_run_log(workspace.run_log, f"raw_markdown={workspace.raw_markdown}")
+        append_run_log(workspace.run_log, f"document_ir={workspace.document_ir_json}")
 
         if progress is not None:
             progress(0.35, desc="Translating extracted text")
