@@ -11,7 +11,7 @@ def test_document_ir_module_exists() -> None:
 
 
 def test_document_ir_exposes_rich_document_types() -> None:
-    import openpdf2zh.document.ir as ir
+    from openpdf2zh.document import ir
 
     expected = {
         "TextStyle",

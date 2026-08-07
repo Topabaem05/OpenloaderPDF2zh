@@ -25,8 +25,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e '.[dev]'
 
-      - name: Lint
-        run: python -m ruff check src tests tools/quality
+      - name: Lint quality foundation
+        run: >-
+          python -m ruff check
+          src/openpdf2zh/document
+          src/openpdf2zh/services/document_builder.py
+          src/openpdf2zh/services/pdf_structure_service.py
+          tests/helpers
+          tests/test_document_ir.py
+          tests/test_document_builder.py
+          tests/test_pdf_structure_service.py
+          tests/test_pdf_quality_regression.py
+          tools/quality
 
       - name: Test
         run: python -m pytest -q

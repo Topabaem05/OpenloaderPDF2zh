@@ -90,5 +90,5 @@ def write_document_ir(path: Path, document: DocumentIR) -> None:
 def read_document_ir(path: Path) -> DocumentIR:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("Document IR root must be a JSON object")
+        raise TypeError("Document IR root must be a JSON object")
     return document_ir_from_dict(payload)

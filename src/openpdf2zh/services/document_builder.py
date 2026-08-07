@@ -4,7 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openpdf2zh.document.ir import DocumentIR, DocumentRun, PageIR, ParagraphIR, TextStyle
+from openpdf2zh.document.ir import (
+    DocumentIR,
+    DocumentRun,
+    PageIR,
+    ParagraphIR,
+    TextStyle,
+)
 from openpdf2zh.services.pdf_structure_service import (
     PdfDocumentStructure,
     PdfStructureService,
