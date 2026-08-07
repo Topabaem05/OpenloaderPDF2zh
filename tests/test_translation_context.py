@@ -97,6 +97,20 @@ def test_context_builder_masks_protected_runs_and_preserves_context() -> None:
     assert paragraph.protected_tokens[token] == "Cp = (p-p∞)/q∞"
 
 
+def test_context_builder_build_runs_skips_protected_formula() -> None:
+    items = TranslationContextBuilder().build_runs(
+        _document(),
+        target_language="Korean",
+    )
+
+    texts = [item.text for item in items]
+    assert "Cp = (p-p∞)/q∞" not in texts
+    body = next(item for item in items if item.segment_id == "r-one-b")
+    assert body.section_title == "Boundary Layer"
+    assert body.previous_text == "Boundary Layer"
+    assert body.next_text == "It grows downstream."
+
+
 def test_context_builder_restores_protected_token_exactly() -> None:
     builder = TranslationContextBuilder()
     items = builder.build(_document(), target_language="Korean")

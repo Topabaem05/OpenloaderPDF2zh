@@ -7,9 +7,11 @@ import pymupdf as fitz
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import PipelineRequest, PipelineResult
+from openpdf2zh.services.context_translation_service import (
+    ContextTranslationService as TranslationService,
+)
 from openpdf2zh.services.parser_service import ParserService
 from openpdf2zh.services.safe_render_service import SafeRenderService as RenderService
-from openpdf2zh.services.translation_service import TranslationService
 from openpdf2zh.services.usage_quota import QuotaLease
 from openpdf2zh.utils.files import append_run_log, prepare_workspace
 
