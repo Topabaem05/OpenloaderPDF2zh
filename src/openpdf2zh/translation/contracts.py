@@ -9,6 +9,7 @@ class TranslationRequestItem:
     text: str
     target_language: str
     section_title: str = ""
+    paragraph_text: str = ""
     previous_text: str = ""
     next_text: str = ""
     glossary: dict[str, str] = field(default_factory=dict)

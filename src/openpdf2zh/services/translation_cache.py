@@ -28,6 +28,7 @@ class TranslationCache:
             "target_language": item.target_language,
             "text": item.text,
             "section_title": item.section_title,
+            "paragraph_text": item.paragraph_text,
             "previous_text": item.previous_text,
             "next_text": item.next_text,
             "glossary": sorted(item.glossary.items()),

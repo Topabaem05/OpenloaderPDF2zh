@@ -95,6 +95,8 @@ class OpenRouterTranslator(BaseTranslator):
         context_lines: list[str] = []
         if item.section_title:
             context_lines.append(f"Section title: {item.section_title}")
+        if item.paragraph_text:
+            context_lines.append(f"Current paragraph: {item.paragraph_text}")
         if item.previous_text:
             context_lines.append(f"Previous paragraph: {item.previous_text}")
         if item.next_text:
