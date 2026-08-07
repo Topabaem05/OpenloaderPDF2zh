@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import time
 from typing import Any
 from urllib import error as urllib_error
@@ -155,7 +154,7 @@ class OpenRouterTranslator(BaseTranslator):
                 raise RuntimeError(
                     f"OpenRouter request failed with status {exc.code}: {detail}"
                 ) from exc
-            except (TimeoutError, socket.timeout) as exc:
+            except TimeoutError as exc:
                 last_error = exc
                 if attempt < self.MAX_ATTEMPTS:
                     self._sleep_before_retry(attempt)
@@ -182,7 +181,7 @@ class OpenRouterTranslator(BaseTranslator):
         time.sleep(float(attempt))
 
     def _is_timeout_reason(self, reason: object) -> bool:
-        if isinstance(reason, (TimeoutError, socket.timeout)):
+        if isinstance(reason, TimeoutError):
             return True
         if isinstance(reason, str):
             return "timed out" in reason.lower() or "timeout" in reason.lower()
@@ -212,10 +211,10 @@ class OpenRouterTranslator(BaseTranslator):
             raise RuntimeError("OpenRouter response did not include any choices.")
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
-            raise RuntimeError("OpenRouter choice payload is malformed.")
+            raise TypeError("OpenRouter choice payload is malformed.")
         message = first_choice.get("message")
         if not isinstance(message, dict):
-            raise RuntimeError("OpenRouter message payload is malformed.")
+            raise TypeError("OpenRouter message payload is malformed.")
         content = message.get("content")
         if isinstance(content, str):
             return content

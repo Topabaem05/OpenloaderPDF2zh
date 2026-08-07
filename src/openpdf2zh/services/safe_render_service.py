@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-from pathlib import Path
 from typing import Any
 
 import pymupdf as fitz
@@ -340,11 +339,7 @@ class SafeRenderService(RenderService):
         if page_ir is None:
             return [self._synthetic_run(block) for block in blocks]
 
-        available_runs = [
-            run
-            for paragraph in page_ir.paragraphs
-            for run in paragraph.runs
-        ]
+        available_runs = [run for paragraph in page_ir.paragraphs for run in paragraph.runs]
         selected: dict[str, DocumentRun] = {}
         for block in blocks:
             matched = False

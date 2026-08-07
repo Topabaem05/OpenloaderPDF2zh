@@ -24,7 +24,7 @@ class Glossary:
             self.add(entry.source, entry.target)
 
     @classmethod
-    def from_csv(cls, path: Path | str) -> "Glossary":
+    def from_csv(cls, path: Path | str) -> Glossary:
         entries: list[GlossaryEntry] = []
         with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
@@ -46,7 +46,7 @@ class Glossary:
         entry = GlossaryEntry(source=source.strip(), target=target.strip())
         self._entries[entry.source.casefold()] = entry
 
-    def merge(self, other: "Glossary", *, prefer_other: bool = True) -> "Glossary":
+    def merge(self, other: Glossary, *, prefer_other: bool = True) -> Glossary:
         merged = Glossary(list(self._entries.values()))
         for entry in other.entries:
             key = entry.source.casefold()
