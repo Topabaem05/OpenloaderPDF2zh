@@ -61,7 +61,7 @@ class ParserService:
                     format="json,markdown",
                     hybrid="off",
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise RuntimeError(f"OpenDataLoader parsing failed: {exc}") from exc
 
             append_run_log(workspace.run_log, "parser=convert:done")
