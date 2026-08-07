@@ -32,6 +32,7 @@ jobs:
           src/openpdf2zh/translation
           src/openpdf2zh/pipeline.py
           src/openpdf2zh/providers/base.py
+          src/openpdf2zh/providers/ctranslate2.py
           src/openpdf2zh/providers/openrouter.py
           src/openpdf2zh/services/context_translation_service.py
           src/openpdf2zh/services/document_builder.py
@@ -53,6 +54,7 @@ jobs:
           tests/test_context_translation_service.py
           tests/test_glossary.py
           tests/test_base_translator_batch.py
+          tests/test_ctranslate2_provider.py
           tests/test_openrouter_context.py
           tools/quality
 

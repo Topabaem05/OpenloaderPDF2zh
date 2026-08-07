@@ -9,6 +9,7 @@ import ctranslate2
 import sentencepiece as spm
 
 from openpdf2zh.providers.base import BaseTranslator
+from openpdf2zh.translation.contracts import TranslationRequestItem
 
 
 class CTranslate2Translator(BaseTranslator):
@@ -35,13 +36,16 @@ class CTranslate2Translator(BaseTranslator):
 
         if not self._model_root.is_dir():
             raise RuntimeError(
-                f"CTranslate2 model directory was not found: {self._model_root}. Check OPENPDF2ZH_CTRANSLATE2_MODEL_DIR."
+                f"CTranslate2 model directory was not found: {self._model_root}. "
+                "Check OPENPDF2ZH_CTRANSLATE2_MODEL_DIR."
             )
         if self._tokenizer_path and not self._use_transformers_multilingual_tokenizer:
             tokenizer_model_path = Path(self._tokenizer_path).expanduser().resolve()
             if not tokenizer_model_path.is_file():
                 raise RuntimeError(
-                    f"CTranslate2 tokenizer model was not found: {tokenizer_model_path}. Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
+                    "CTranslate2 tokenizer model was not found: "
+                    f"{tokenizer_model_path}. "
+                    "Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
                 )
         self._validate_runtime_support()
         pointer_model = self._first_directional_lfs_pointer()
@@ -53,7 +57,10 @@ class CTranslate2Translator(BaseTranslator):
             and not self._use_transformers_multilingual_tokenizer
         ):
             raise RuntimeError(
-                "CTranslate2 tokenizer assets are missing. Set OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH, provide bundled multilingual tokenizer files, or provide directional model subdirectories."
+                "CTranslate2 tokenizer assets are missing. Set "
+                "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH, provide bundled "
+                "multilingual tokenizer files, or provide directional model "
+                "subdirectories."
             )
 
         self._translator_cache: dict[str, ctranslate2.Translator] = {}
@@ -79,53 +86,139 @@ class CTranslate2Translator(BaseTranslator):
         )
 
     def translate(self, text: str, *, target_language: str, model: str) -> str:
+        _ = model
         if self._directional_assets_ready():
             return self._translate_directional(text, target_language)
         return self._translate_multilingual(text, target_language)
 
+    def translate_many(
+        self,
+        items: list[TranslationRequestItem],
+        *,
+        model: str,
+    ) -> list[str]:
+        _ = model
+        if not items:
+            return []
+        if self._directional_assets_ready():
+            return self._translate_directional_many(items)
+        return self._translate_multilingual_many(items)
+
     def _translate_multilingual(self, text: str, target_language: str) -> str:
+        return self._translate_multilingual_many(
+            [
+                TranslationRequestItem(
+                    segment_id="single",
+                    text=text,
+                    target_language=target_language,
+                )
+            ]
+        )[0]
+
+    def _translate_multilingual_many(
+        self,
+        items: list[TranslationRequestItem],
+    ) -> list[str]:
         translator = self._ensure_multilingual_translator()
-        source_tag = self._detect_source_language_tag(text)
-        target_tag = self._resolve_target_language_tag(target_language)
-        source_tokens = self._encode_multilingual_source_tokens(text, source_tag)
-        batch = [[source_tag, *source_tokens]]
-        target_prefix = [[target_tag]]
+        batch: list[list[str]] = []
+        target_prefix: list[list[str]] = []
+        target_tags: list[str] = []
+
+        for item in items:
+            source_tag = self._detect_source_language_tag(item.text)
+            target_tag = self._resolve_target_language_tag(item.target_language)
+            source_tokens = self._encode_multilingual_source_tokens(
+                item.text,
+                source_tag,
+            )
+            batch.append([source_tag, *source_tokens])
+            target_prefix.append([target_tag])
+            target_tags.append(target_tag)
 
         results = translator.translate_batch(
             batch,
             target_prefix=target_prefix,
             beam_size=1,
-            max_batch_size=1,
+            max_batch_size=len(batch),
             batch_type="examples",
         )
-        if not results or not results[0].hypotheses:
-            raise RuntimeError("CTranslate2 returned an empty translation result.")
+        self._validate_result_count(results, len(items))
 
-        tokens = list(results[0].hypotheses[0])
-        if tokens and tokens[0] == target_tag:
-            tokens = tokens[1:]
-        translated = self._decode_multilingual_tokens(tokens).strip()
-        if not translated:
-            raise RuntimeError("CTranslate2 returned an empty translation output.")
+        translated: list[str] = []
+        for result, target_tag in zip(results, target_tags, strict=True):
+            if not result.hypotheses:
+                raise RuntimeError("CTranslate2 returned an empty translation result.")
+            tokens = list(result.hypotheses[0])
+            if tokens and tokens[0] == target_tag:
+                tokens = tokens[1:]
+            text = self._decode_multilingual_tokens(tokens).strip()
+            if not text:
+                raise RuntimeError("CTranslate2 returned an empty translation output.")
+            translated.append(text)
         return translated
 
     def _translate_directional(self, text: str, target_language: str) -> str:
-        translator, source_tokenizer, target_tokenizer = (
-            self._ensure_directional_runtime(target_language)
-        )
-        source_tokens = source_tokenizer.encode(text, out_type=str)
-        results = translator.translate_batch(
-            [source_tokens],
-            beam_size=1,
-            max_batch_size=1,
-            batch_type="examples",
-        )
-        if not results or not results[0].hypotheses:
-            raise RuntimeError("CTranslate2 returned an empty translation result.")
-        translated = target_tokenizer.decode(results[0].hypotheses[0]).strip()
-        if not translated:
-            raise RuntimeError("CTranslate2 returned an empty translation output.")
-        return translated
+        return self._translate_directional_many(
+            [
+                TranslationRequestItem(
+                    segment_id="single",
+                    text=text,
+                    target_language=target_language,
+                )
+            ]
+        )[0]
+
+    def _translate_directional_many(
+        self,
+        items: list[TranslationRequestItem],
+    ) -> list[str]:
+        grouped: dict[str, list[tuple[int, TranslationRequestItem]]] = {}
+        for index, item in enumerate(items):
+            grouped.setdefault(item.target_language, []).append((index, item))
+
+        translated: list[str | None] = [None] * len(items)
+        for target_language, indexed_items in grouped.items():
+            translator, source_tokenizer, target_tokenizer = (
+                self._ensure_directional_runtime(target_language)
+            )
+            batch = [
+                source_tokenizer.encode(item.text, out_type=str)
+                for _, item in indexed_items
+            ]
+            results = translator.translate_batch(
+                batch,
+                beam_size=1,
+                max_batch_size=len(batch),
+                batch_type="examples",
+            )
+            self._validate_result_count(results, len(indexed_items))
+
+            for (original_index, _item), result in zip(
+                indexed_items,
+                results,
+                strict=True,
+            ):
+                if not result.hypotheses:
+                    raise RuntimeError(
+                        "CTranslate2 returned an empty translation result."
+                    )
+                text = target_tokenizer.decode(result.hypotheses[0]).strip()
+                if not text:
+                    raise RuntimeError(
+                        "CTranslate2 returned an empty translation output."
+                    )
+                translated[original_index] = text
+
+        if any(value is None for value in translated):
+            raise RuntimeError("CTranslate2 did not return all requested translations.")
+        return [str(value) for value in translated]
+
+    def _validate_result_count(self, results: list[Any], expected: int) -> None:
+        if len(results) != expected:
+            raise RuntimeError(
+                "CTranslate2 returned a different number of translations than "
+                f"requested: expected {expected}, got {len(results)}."
+            )
 
     def _ensure_multilingual_translator(self) -> ctranslate2.Translator:
         key = "multilingual"
@@ -141,7 +234,9 @@ class CTranslate2Translator(BaseTranslator):
             tokenizer_model_path = Path(self._tokenizer_path).expanduser().resolve()
             if not tokenizer_model_path.is_file():
                 raise RuntimeError(
-                    f"CTranslate2 tokenizer model was not found: {tokenizer_model_path}. Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
+                    "CTranslate2 tokenizer model was not found: "
+                    f"{tokenizer_model_path}. "
+                    "Check OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH."
                 )
             tokenizer = spm.SentencePieceProcessor(model_file=str(tokenizer_model_path))
             self._source_tokenizer_cache[key] = tokenizer
@@ -189,7 +284,8 @@ class CTranslate2Translator(BaseTranslator):
             from transformers import AutoTokenizer
         except ImportError as exc:
             raise RuntimeError(
-                "Transformers tokenizer assets were detected for the CTranslate2 model, but `transformers` is not installed."
+                "Transformers tokenizer assets were detected for the CTranslate2 "
+                "model, but `transformers` is not installed."
             ) from exc
 
         return AutoTokenizer.from_pretrained(
@@ -235,14 +331,17 @@ class CTranslate2Translator(BaseTranslator):
     def _ensure_directional_runtime(
         self, target_language: str
     ) -> tuple[
-        ctranslate2.Translator, spm.SentencePieceProcessor, spm.SentencePieceProcessor
+        ctranslate2.Translator,
+        spm.SentencePieceProcessor,
+        spm.SentencePieceProcessor,
     ]:
         try:
             model_dir_name = self.DIRECTIONAL_MODEL_DIRS[target_language]
         except KeyError as exc:
             raise RuntimeError(
                 "Unsupported CTranslate2 target language: "
-                f"{target_language}. This local CTranslate2 setup currently supports only English and Korean."
+                f"{target_language}. This local CTranslate2 setup currently "
+                "supports only English and Korean."
             ) from exc
 
         if model_dir_name not in self._translator_cache:
@@ -294,8 +393,10 @@ class CTranslate2Translator(BaseTranslator):
     def _raise_for_lfs_pointer(self, path: Path) -> None:
         if self._is_lfs_pointer(path):
             raise RuntimeError(
-                f"CTranslate2 model file is still a Git LFS pointer, not the real binary: {path}. "
-                "On Railway, run the build-time quickmt Hugging Face materialization step so the real local model files are downloaded into the image."
+                "CTranslate2 model file is still a Git LFS pointer, not the real "
+                f"binary: {path}. On Railway, run the build-time quickmt Hugging "
+                "Face materialization step so the real local model files are "
+                "downloaded into the image."
             )
 
     def _is_lfs_pointer(self, path: Path) -> bool:
