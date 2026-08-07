@@ -119,13 +119,14 @@ class AppSettings:
     ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
     openrouter_api_base_url: str = OPENROUTER_API_BASE_URL
+    glossary_path: str = ""
 
     @property
     def public_root(self) -> Path:
         return self.workspace_root / "public"
 
     @classmethod
-    def from_env(cls) -> "AppSettings":
+    def from_env(cls) -> AppSettings:
         railway_port = os.getenv("PORT")
         if railway_port:
             host = "0.0.0.0"
@@ -236,4 +237,5 @@ class AppSettings:
                 OPENROUTER_API_BASE_URL,
             ).strip()
             or OPENROUTER_API_BASE_URL,
+            glossary_path=os.getenv("OPENPDF2ZH_GLOSSARY_PATH", "").strip(),
         )

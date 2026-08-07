@@ -28,6 +28,7 @@ jobs:
       - name: Lint quality foundation
         run: >-
           python -m ruff check
+          src/openpdf2zh/config.py
           src/openpdf2zh/document
           src/openpdf2zh/translation
           src/openpdf2zh/pipeline.py
@@ -53,6 +54,7 @@ jobs:
           tests/test_translation_context.py
           tests/test_context_translation_service.py
           tests/test_glossary.py
+          tests/test_glossary_config.py
           tests/test_base_translator_batch.py
           tests/test_ctranslate2_provider.py
           tests/test_openrouter_context.py

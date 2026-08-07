@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from openpdf2zh.document.ir import DocumentIR, DocumentRun, ParagraphIR
@@ -21,10 +22,22 @@ class ContextTranslationService(TranslationService):
     def __init__(self, settings) -> None:
         super().__init__(settings)
         self.context_builder = TranslationContextBuilder()
-        self.glossary = Glossary()
+        self.glossary = self._load_configured_glossary()
 
     def set_glossary(self, glossary: Glossary) -> None:
         self.glossary = glossary
+
+    def _load_configured_glossary(self) -> Glossary:
+        configured = self.settings.glossary_path.strip()
+        if not configured:
+            return Glossary()
+        path = Path(configured).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Glossary CSV was not found: {path}. "
+                "Check OPENPDF2ZH_GLOSSARY_PATH."
+            )
+        return Glossary.from_csv(path)
 
     def translate_document(
         self,
