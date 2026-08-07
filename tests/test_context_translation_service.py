@@ -24,6 +24,7 @@ from openpdf2zh.utils.files import prepare_workspace
 class _CaptureTranslator(BaseTranslator):
     def __init__(self) -> None:
         self.items: list[TranslationRequestItem] = []
+        self.translate_many_call_count = 0
 
     def translate(self, text: str, *, target_language: str, model: str) -> str:
         return f"{target_language}:{text}"
@@ -34,6 +35,7 @@ class _CaptureTranslator(BaseTranslator):
         *,
         model: str,
     ) -> list[str]:
+        self.translate_many_call_count += 1
         self.items.extend(items)
         return [f"KO:{item.text.strip()}" for item in items]
 
@@ -109,28 +111,34 @@ def _document_ir() -> DocumentIR:
     )
 
 
-def test_context_translation_service_translates_only_translatable_runs(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source.pdf"
+def _workspace(tmp_path: Path, job_id: str):
+    source = tmp_path / f"{job_id}.pdf"
     document = fitz.open()
     document.new_page(width=300, height=400)
     document.save(source)
     document.close()
-    workspace = prepare_workspace(tmp_path / "workspace", source, job_id="context")
+    workspace = prepare_workspace(tmp_path / "workspace", source, job_id=job_id)
     write_document_ir(workspace.document_ir_json, _document_ir())
+    return workspace
+
+
+def _request(workspace) -> PipelineRequest:
+    return PipelineRequest(
+        input_pdf=workspace.input_pdf,
+        target_language="Korean",
+        provider="openrouter",
+        model="test-model",
+    )
+
+
+def test_context_translation_service_translates_only_translatable_runs(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path, "context")
 
     translator = _CaptureTranslator()
-    service = _TestService(AppSettings(), translator)
-    units = service.translate_document(
-        PipelineRequest(
-            input_pdf=workspace.input_pdf,
-            target_language="Korean",
-            provider="openrouter",
-            model="test-model",
-        ),
-        workspace,
-    )
+    service = _TestService(AppSettings(translation_cache_enabled=False), translator)
+    units = service.translate_document(_request(workspace), workspace)
 
     assert [unit.original for unit in units] == [
         "Boundary Layer",
@@ -158,32 +166,37 @@ def test_context_translation_service_translates_only_translatable_runs(
 def test_context_translation_service_converts_native_bbox_to_parser_coordinates(
     tmp_path: Path,
 ) -> None:
-    source = tmp_path / "source.pdf"
-    document = fitz.open()
-    document.new_page(width=300, height=400)
-    document.save(source)
-    document.close()
-    workspace = prepare_workspace(tmp_path / "workspace", source, job_id="coords")
-    write_document_ir(workspace.document_ir_json, _document_ir())
+    workspace = _workspace(tmp_path, "coords")
 
-    service = _TestService(AppSettings(), _CaptureTranslator())
-    units = service.translate_document(
-        PipelineRequest(
-            input_pdf=workspace.input_pdf,
-            target_language="Korean",
-            provider="openrouter",
-            model="test-model",
-        ),
-        workspace,
+    service = _TestService(
+        AppSettings(translation_cache_enabled=False),
+        _CaptureTranslator(),
     )
+    units = service.translate_document(_request(workspace), workspace)
     body = next(unit for unit in units if unit.original == "The relation ")
 
     assert body.bbox == [40.0, 305.0, 100.0, 320.0]
 
 
+def test_context_translation_service_reuses_translation_cache(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path, "cache")
+    translator = _CaptureTranslator()
+    settings = AppSettings(
+        translation_cache_enabled=True,
+        translation_cache_path=str(tmp_path / "translations.sqlite3"),
+    )
+    service = _TestService(settings, translator)
+
+    first = service.translate_document(_request(workspace), workspace)
+    second = service.translate_document(_request(workspace), workspace)
+
+    assert [unit.translated for unit in first] == [unit.translated for unit in second]
+    assert translator.translate_many_call_count == 1
+
+
 def test_pipeline_uses_context_translation_service() -> None:
     from openpdf2zh.pipeline import PipelineRunner
 
-    runner = PipelineRunner(AppSettings())
+    runner = PipelineRunner(AppSettings(translation_cache_enabled=False))
 
     assert isinstance(runner.translator, ContextTranslationService)

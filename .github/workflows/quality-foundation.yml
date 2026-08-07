@@ -53,6 +53,7 @@ jobs:
           tests/test_safe_render_service.py
           tests/test_translation_context.py
           tests/test_context_translation_service.py
+          tests/test_translation_cache.py
           tests/test_glossary.py
           tests/test_glossary_config.py
           tests/test_base_translator_batch.py
