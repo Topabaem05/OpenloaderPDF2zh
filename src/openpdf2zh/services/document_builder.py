@@ -14,6 +14,7 @@ from openpdf2zh.document.ir import (
 from openpdf2zh.services.pdf_structure_service import (
     PdfDocumentStructure,
     PdfStructureService,
+    PdfTableObject,
     PdfTextSpan,
 )
 
@@ -55,6 +56,8 @@ class DocumentBuilder:
         }
     )
     MIN_SPAN_COVERAGE = 0.5
+    MIN_NATIVE_TABLE_COVERAGE = 0.5
+    MIN_CELL_INSIDE_SEMANTIC_TABLE = 0.8
 
     def __init__(self, structure_service: PdfStructureService | None = None) -> None:
         self.structure_service = structure_service or PdfStructureService()
@@ -81,6 +84,13 @@ class DocumentBuilder:
                 self._convert_region_bbox(region, native_page.height)
                 for region in regions_by_page.get(native_page.page_number, [])
             ]
+            page_regions.extend(
+                self._promote_native_table_cells(
+                    page_regions,
+                    native_page.tables,
+                    page_number=native_page.page_number,
+                )
+            )
             grouped: dict[tuple[str, int | str], list[PdfTextSpan]] = {}
             group_meta: dict[tuple[str, int | str], SemanticRegion | None] = {}
             group_order: list[tuple[str, int | str]] = []
@@ -218,6 +228,60 @@ class DocumentBuilder:
             discovery_order=region.discovery_order,
             translatable=region.translatable,
         )
+
+    def _promote_native_table_cells(
+        self,
+        regions: list[SemanticRegion],
+        tables: list[PdfTableObject],
+        *,
+        page_number: int,
+    ) -> list[SemanticRegion]:
+        semantic_tables = [region for region in regions if region.label == "table"]
+        if not semantic_tables or not tables:
+            return []
+
+        next_order = max((region.discovery_order for region in regions), default=0) + 1
+        promoted: list[SemanticRegion] = []
+        for table_index, table in enumerate(tables, start=1):
+            table_area = max(self._area(table.bbox), 1e-9)
+            matching_tables = [
+                region
+                for region in semantic_tables
+                if self._intersection_area(table.bbox, region.bbox) / table_area
+                >= self.MIN_NATIVE_TABLE_COVERAGE
+            ]
+            if not matching_tables:
+                continue
+            semantic_table = max(
+                matching_tables,
+                key=lambda region: self._intersection_area(table.bbox, region.bbox),
+            )
+
+            for cell_index, cell_bbox in enumerate(table.cells, start=1):
+                cell_area = self._area(cell_bbox)
+                if cell_area <= 0:
+                    continue
+                inside_ratio = (
+                    self._intersection_area(cell_bbox, semantic_table.bbox) / cell_area
+                )
+                if inside_ratio < self.MIN_CELL_INSIDE_SEMANTIC_TABLE:
+                    continue
+                promoted.append(
+                    SemanticRegion(
+                        region_id=(
+                            f"{semantic_table.region_id}-native-table-{table_index}"
+                            f"-cell-{cell_index}"
+                        ),
+                        page_number=page_number,
+                        label="table cell",
+                        bbox=list(cell_bbox),
+                        content="",
+                        discovery_order=next_order,
+                        translatable=True,
+                    )
+                )
+                next_order += 1
+        return promoted
 
     def _best_region_for_span(
         self,
