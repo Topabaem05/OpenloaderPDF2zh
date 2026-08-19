@@ -1,6 +1,23 @@
 # OpenPDF2ZH Workbench
 
-PDF translation workbench with Gradio and CLI entrypoints.
+PDF translation workbench with a React/Vite review UI, FastAPI/Gradio service, and CLI entrypoints.
+
+## Architecture
+
+```text
+Vercel (React/Vite workbench)
+        |
+        | VITE_API_BASE_URL
+        v
+Persistent container/VM (FastAPI + Gradio + translation worker + workspace)
+```
+
+The Python backend is stateful: it accepts large PDF uploads, runs background jobs, keeps job status, loads local model assets, and writes downloadable artifacts. Vercel therefore serves the static workbench, while Docker, Railway, a VPS, or another persistent container host runs the backend.
+
+For a split frontend/backend deployment, start the backend with `openpdf2zh-server` or the Docker image. The ordinary `openpdf2zh serve` command remains the same-origin local UI path.
+
+- Deployment guide: [`docs/deployment-vercel.md`](docs/deployment-vercel.md)
+- Competitive gap analysis and roadmap: [`docs/project-comparison.md`](docs/project-comparison.md)
 
 ## Install
 
@@ -10,10 +27,16 @@ PDF translation workbench with Gradio and CLI entrypoints.
 pip install openpdf2zh-gradio
 ```
 
-Run Gradio:
+Run the integrated same-origin UI:
 
 ```bash
 openpdf2zh serve
+```
+
+Run the backend entrypoint for a separate frontend:
+
+```bash
+openpdf2zh-server
 ```
 
 Equivalent Gradio shortcut:
@@ -41,6 +64,13 @@ pip install -e .[dev]
 python -m openpdf2zh serve
 ```
 
+Build and test the React workbench:
+
+```bash
+npm --prefix apps/web/workbench ci
+npm --prefix apps/web/workbench run check
+```
+
 ### Docker
 
 ```bash
@@ -48,7 +78,13 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open Gradio:
+Open the integrated workbench:
+
+```text
+http://localhost:7860/
+```
+
+Open the Gradio fallback:
 
 ```text
 http://localhost:7860/gradio
@@ -74,6 +110,25 @@ docker run --rm -p 7860:7860 \
   -v "$PWD/resources/models/quickmt:/app/resources/models/quickmt:ro" \
   openpdf2zh-gradio
 ```
+
+## Vercel frontend
+
+1. Deploy the Python backend on a persistent container host.
+2. Set the backend allowlist:
+
+```text
+OPENPDF2ZH_CORS_ALLOWED_ORIGINS=https://YOUR_PROJECT.vercel.app
+```
+
+3. Import this repository into Vercel and set:
+
+```text
+VITE_API_BASE_URL=https://YOUR_BACKEND
+```
+
+The root [`vercel.json`](vercel.json) installs and builds `apps/web/workbench` automatically. Relative API and artifact paths are converted to the configured backend origin in the browser.
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FTopabaem05%2FOpenloaderPDF2zh&project-name=openloader-pdf2zh&repository-name=openloader-pdf2zh&env=VITE_API_BASE_URL)
 
 ## CLI Usage
 
@@ -115,7 +170,9 @@ Use a custom local model directory:
 
 ```bash
 OPENPDF2ZH_HOST_MODEL_DIR=/absolute/path/to/models
-openpdf2zh translate sample.pdf --model-dir /absolute/path/to/models --target-language Korean
+openpdf2zh translate sample.pdf \
+  --model-dir /absolute/path/to/models \
+  --target-language Korean
 ```
 
 Generated CLI output includes:

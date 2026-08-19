@@ -1,6 +1,18 @@
-import type { JobCreateResponse, JobSettings, JobStatusResponse } from '../types';
+import type {
+  JobArtifactLinks,
+  JobCreateResponse,
+  JobSettings,
+  JobStatusResponse,
+} from '../types';
+
+import {
+  buildBackendUrl,
+  normalizeApiBaseUrl,
+  resolveBackendUrl,
+} from './api-url';
 
 const JOB_POLL_INTERVAL_MS = 1500;
+const API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 function normalizeMessage(value?: string): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -45,7 +57,7 @@ export async function createJob(
   file: File,
   settings: JobSettings,
 ): Promise<JobCreateResponse> {
-  const response = await fetch('/api/jobs', {
+  const response = await fetch(buildBackendUrl('/api/jobs', API_BASE_URL), {
     method: 'POST',
     body: buildFormData(file, settings),
   });
@@ -58,11 +70,43 @@ export async function createJob(
 export async function fetchJobStatus(
   jobId: string,
 ): Promise<JobStatusResponse> {
-  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+  const response = await fetch(
+    buildBackendUrl(`/api/jobs/${encodeURIComponent(jobId)}`, API_BASE_URL),
+  );
   if (!response.ok) {
     throw new Error(await readErrorMessage(response));
   }
-  return (await response.json()) as JobStatusResponse;
+  return normalizeJobStatusResponse((await response.json()) as JobStatusResponse);
+}
+
+function normalizeJobStatusResponse(
+  status: JobStatusResponse,
+): JobStatusResponse {
+  return {
+    ...status,
+    artifacts: normalizeArtifactLinks(status.artifacts),
+  };
+}
+
+function normalizeArtifactLinks(
+  artifacts: JobArtifactLinks | undefined,
+): JobArtifactLinks | undefined {
+  if (!artifacts) {
+    return undefined;
+  }
+  return {
+    ...artifacts,
+    translated_pdf: resolveBackendUrl(artifacts.translated_pdf, API_BASE_URL),
+    detected_boxes_pdf: resolveBackendUrl(
+      artifacts.detected_boxes_pdf,
+      API_BASE_URL,
+    ),
+    structured_json: resolveBackendUrl(artifacts.structured_json, API_BASE_URL),
+    result_md: resolveBackendUrl(artifacts.result_md, API_BASE_URL),
+    generated_files: artifacts.generated_files?.map(
+      (value) => resolveBackendUrl(value, API_BASE_URL) ?? value,
+    ),
+  };
 }
 
 async function readErrorMessage(response: Response): Promise<string> {

@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mjs",
     "build": "vite build",
+    "check": "npm run test && npm run build",
     "preview": "vite preview"
   },
   "dependencies": {

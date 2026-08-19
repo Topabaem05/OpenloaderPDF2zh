@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m openpdf2zh
+    command: python -m openpdf2zh.server
     environment:
       OPENPDF2ZH_HOST: "0.0.0.0"
       OPENPDF2ZH_PORT: "7860"
@@ -17,6 +17,7 @@ services:
       OPENPDF2ZH_RENDER_LAYOUT_ENGINE: "${OPENPDF2ZH_RENDER_LAYOUT_ENGINE:-legacy}"
       OPENPDF2ZH_JOB_QUEUE_CONCURRENCY: "${OPENPDF2ZH_JOB_QUEUE_CONCURRENCY:-2}"
       OPENPDF2ZH_JOB_QUEUE_MAX_SIZE: "${OPENPDF2ZH_JOB_QUEUE_MAX_SIZE:-8}"
+      OPENPDF2ZH_CORS_ALLOWED_ORIGINS: "${OPENPDF2ZH_CORS_ALLOWED_ORIGINS:-}"
     ports:
       - "${OPENPDF2ZH_PORT:-7860}:7860"
     restart: unless-stopped

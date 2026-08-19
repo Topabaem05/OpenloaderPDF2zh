@@ -30,6 +30,7 @@ dev = [
 [project.scripts]
 openpdf2zh = "openpdf2zh.cli:main"
 openpdf2zh-gradio = "openpdf2zh.cli:serve_main"
+openpdf2zh-server = "openpdf2zh.server:main"
 openpdf2zh-translate = "openpdf2zh.cli:translate_main"
 
 [tool.setuptools]

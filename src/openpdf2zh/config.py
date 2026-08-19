@@ -78,6 +78,20 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_cors_origins(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    origins: list[str] = []
+    seen: set[str] = set()
+    for candidate in value.split(","):
+        origin = candidate.strip().rstrip("/")
+        if not origin or origin in seen:
+            continue
+        origins.append(origin)
+        seen.add(origin)
+    return tuple(origins)
+
+
 def _normalize_render_layout_engine(value: str | None) -> str:
     if not value:
         return "legacy"
@@ -116,6 +130,7 @@ class AppSettings:
     rate_limit_timezone: str = "Asia/Seoul"
     rate_limit_storage_path: str = ""
     trust_forwarded_for: bool = True
+    cors_allowed_origins: tuple[str, ...] = ()
     ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
     openrouter_api_base_url: str = OPENROUTER_API_BASE_URL
@@ -226,6 +241,9 @@ class AppSettings:
             trust_forwarded_for=_as_bool(
                 os.getenv("OPENPDF2ZH_TRUST_FORWARDED_FOR"),
                 default=True,
+            ),
+            cors_allowed_origins=_parse_cors_origins(
+                os.getenv("OPENPDF2ZH_CORS_ALLOWED_ORIGINS")
             ),
             ctranslate2_model_dir=ctranslate2_model_dir,
             ctranslate2_tokenizer_path=os.getenv(

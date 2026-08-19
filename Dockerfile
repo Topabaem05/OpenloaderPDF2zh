@@ -19,4 +19,4 @@ RUN pip install --upgrade pip \
 
 EXPOSE 7860
 
-CMD ["python", "-m", "openpdf2zh"]
+CMD ["python", "-m", "openpdf2zh.server"]
