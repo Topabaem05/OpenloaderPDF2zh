@@ -67,7 +67,11 @@ export function PdfCanvasPreview({
       }
 
       try {
-        const loadingTask = getDocument(src);
+        const loadingTask = getDocument({
+          url: src,
+          enableScripting: false,
+          isEvalSupported: false,
+        });
         documentProxy = await loadingTask.promise;
 
         if (cancelled) {
