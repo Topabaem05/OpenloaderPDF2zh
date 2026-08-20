@@ -24,7 +24,7 @@ export function WorkbenchShell({
   primaryLabel = 'New Translation',
 }: WorkbenchShellProps) {
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-active-nav={activeNav}>
       <aside className="shell-sidebar">
         <div className="shell-brand">
           <h1>Alexandria</h1>
