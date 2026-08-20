@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { calculateContainedPdfScale } from '../lib/viewport-fit';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -22,7 +23,7 @@ export function PdfCanvasPreview({
   const onDocumentLoadedRef = useRef(onDocumentLoaded);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     onDocumentLoadedRef.current = onDocumentLoaded;
@@ -34,14 +35,17 @@ export function PdfCanvasPreview({
       return;
     }
 
-    const updateWidth = () => {
-      setContainerWidth(shell.clientWidth);
+    const updateSize = () => {
+      setContainerSize({
+        width: shell.clientWidth,
+        height: shell.clientHeight,
+      });
     };
 
-    updateWidth();
+    updateSize();
 
     const observer = new ResizeObserver(() => {
-      updateWidth();
+      updateSize();
     });
 
     observer.observe(shell);
@@ -85,12 +89,18 @@ export function PdfCanvasPreview({
         const safePageNumber = Math.min(Math.max(pageNumber, 1), pageCount);
         const page = await documentProxy.getPage(safePageNumber);
         const baseViewport = page.getViewport({ scale: 1 });
-        const shellWidth = containerWidth || shellRef.current?.clientWidth || baseViewport.width;
-        const targetWidth = Math.max(240, shellWidth - 48);
-        const fitScale = targetWidth / baseViewport.width;
-        const viewport = page.getViewport({
-          scale: fitScale * (zoomPercent / 100),
+        const shellWidth =
+          containerSize.width || shellRef.current?.clientWidth || baseViewport.width;
+        const shellHeight =
+          containerSize.height || shellRef.current?.clientHeight || baseViewport.height;
+        const fitScale = calculateContainedPdfScale({
+          pageWidth: baseViewport.width,
+          pageHeight: baseViewport.height,
+          containerWidth: shellWidth,
+          containerHeight: shellHeight,
+          zoomPercent,
         });
+        const viewport = page.getViewport({ scale: fitScale });
 
         const activeCanvas = canvasRef.current;
         if (!activeCanvas) {
@@ -142,7 +152,7 @@ export function PdfCanvasPreview({
         void documentProxy.destroy();
       }
     };
-  }, [containerWidth, pageNumber, src, zoomPercent]);
+  }, [containerSize.height, containerSize.width, pageNumber, src, zoomPercent]);
 
   return (
     <div ref={shellRef} className="pdf-preview-shell">
