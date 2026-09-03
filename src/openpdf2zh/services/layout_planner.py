@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
-import subprocess
 import shutil
+import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -26,8 +26,7 @@ def same_column(rect: fitz.Rect, anchor: fitz.Rect) -> bool:
         return True
     tolerance = max(12.0, min_width * 0.18)
     return (
-        abs(rect.x0 - anchor.x0) <= tolerance
-        and abs(rect.x1 - anchor.x1) <= tolerance
+        abs(rect.x0 - anchor.x0) <= tolerance and abs(rect.x1 - anchor.x1) <= tolerance
     )
 
 
@@ -56,9 +55,7 @@ def build_column_clusters(
             anchors.append(rect)
 
     for cluster in clusters:
-        cluster.sort(
-            key=lambda item: (rect_getter(item).y0, rect_getter(item).x0)
-        )
+        cluster.sort(key=lambda item: (rect_getter(item).y0, rect_getter(item).x0))
     clusters.sort(
         key=lambda cluster: (
             rect_getter(cluster[0]).x0,
@@ -66,6 +63,11 @@ def build_column_clusters(
         )
     )
     return clusters
+
+
+def source_vertical_gap(previous: fitz.Rect, current: fitz.Rect) -> float:
+    """Preserve a positive source gap; use 1pt only for touching boxes."""
+    return round(max(current.y0 - previous.y1, 1.0), 3)
 
 
 @dataclass(slots=True)
@@ -97,6 +99,7 @@ class LayoutBlock:
     line_height_pt: float
     letter_spacing_em: float | None
     toc_page_number: str
+    fixed_position: bool = False
 
 
 @dataclass(slots=True)
@@ -110,6 +113,7 @@ class PlannedLayoutBlock:
     render_line_height_pt: float = 0.0
     render_letter_spacing_em: float | None = None
     vertical_shift_pt: float = 0.0
+    flow_gap_pt: float = 1.0
     top_delta_pt: float = 0.0
     bottom_delta_pt: float = 0.0
     final_scale_used: float = 1.0
@@ -135,6 +139,7 @@ class PretextMeasurementClient:
         self,
         helper_path: str | None = None,
         timeout_seconds: float = 20.0,
+        render_cjk_font_path: str = "",
     ) -> None:
         repo_root = Path(__file__).resolve().parents[3]
         default_helper_dir = repo_root / "tools" / "layout" / "pretext-helper"
@@ -150,6 +155,7 @@ class PretextMeasurementClient:
             self.helper_dir = default_helper_dir
             self.helper_script = self.helper_dir / "measure.mjs"
         self.timeout_seconds = max(timeout_seconds, 1.0)
+        self.render_cjk_font_path = render_cjk_font_path
 
     def measure_batch(
         self,
@@ -198,12 +204,10 @@ class PretextMeasurementClient:
         try:
             results = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                "Pretext helper returned invalid JSON output."
-            ) from exc
+            raise RuntimeError("Pretext helper returned invalid JSON output.") from exc
 
         if not isinstance(results, dict):
-            raise RuntimeError("Pretext helper returned an unexpected payload shape.")
+            raise TypeError("Pretext helper returned an unexpected payload shape.")
 
         if "results" in results:
             raw_entries = results.get("results")
@@ -229,7 +233,9 @@ class PretextMeasurementClient:
                     {
                         "id": request_id,
                         "text": str(request.get("text", "")),
-                        "font_family": str(request.get("font_family_css", "sans-serif")),
+                        "font_family": str(
+                            request.get("font_family_css", "sans-serif")
+                        ),
                         "font_size_pt": float(request.get("font_size_px", 0.0))
                         * PX_TO_PT,
                         "line_height_pt": float(request.get("line_height_px", 0.0))
@@ -249,6 +255,7 @@ class PretextMeasurementClient:
         return [node_path, str(self.helper_script)], {
             "requests": requests,
             "render_font_path": render_font_path,
+            "render_cjk_font_path": self.render_cjk_font_path,
         }
 
     def _normalize_python_results(
@@ -304,6 +311,7 @@ class LayoutPlanner:
         self.measurement_client = measurement_client or PretextMeasurementClient(
             settings.pretext_helper_path,
             settings.pretext_helper_timeout_seconds,
+            settings.render_cjk_font_path,
         )
 
     def plan_page(
@@ -312,10 +320,22 @@ class LayoutPlanner:
         *,
         render_font_path: str = "",
         fit_validator: FitValidator | None = None,
+        page_rect: fitz.Rect | None = None,
     ) -> list[PlannedLayoutBlock]:
         if not blocks:
             return []
 
+        fixed_blocks = [block for block in blocks if block.fixed_position]
+        toc_blocks = [
+            block
+            for block in blocks
+            if block.toc_page_number and not block.fixed_position
+        ]
+        flow_blocks = [
+            block
+            for block in blocks
+            if not block.fixed_position and not block.toc_page_number
+        ]
         paragraph_blocks = [block for block in blocks if self._uses_pretext(block)]
         measurements, candidate_ids_by_block = self._measure_candidates(
             paragraph_blocks,
@@ -323,23 +343,67 @@ class LayoutPlanner:
         )
         planned: list[PlannedLayoutBlock] = []
 
-        for cluster in self._build_clusters(blocks):
-            cluster_bottom = max(block.render_rect.y1 for block in cluster)
+        for cluster in self._build_flow_clusters(flow_blocks, fixed_blocks):
+            cluster_bottom = self._cluster_bottom_limit(
+                cluster,
+                fixed_blocks,
+                page_rect,
+            )
+            gap_scale = (
+                self._cluster_gap_scale(
+                    cluster,
+                    cluster_bottom,
+                    measurements,
+                    candidate_ids_by_block,
+                )
+                if page_rect is not None
+                else 1.0
+            )
             previous_bottom: float | None = None
             previous_actual_rect: fitz.Rect | None = None
+            previous_block: LayoutBlock | None = None
 
-            for block in cluster:
-                gap = self._gap_height(block)
+            for index, block in enumerate(cluster):
+                gap = (
+                    round(
+                        source_vertical_gap(
+                            previous_block.original_rect,
+                            block.original_rect,
+                        )
+                        * gap_scale,
+                        3,
+                    )
+                    if previous_block is not None
+                    else 0.0
+                )
                 target_y0 = block.render_rect.y0
                 if previous_bottom is not None:
-                    target_y0 = max(target_y0, previous_bottom + gap)
+                    compacted_y0 = previous_bottom + gap
+                    target_y0 = (
+                        compacted_y0
+                        if gap_scale < 1.0
+                        else max(target_y0, compacted_y0)
+                    )
 
                 if self._uses_pretext(block):
                     measurement, fallback, fit_result = self._select_measurement(
                         block,
                         measurements,
                         candidate_ids_by_block.get(id(block), []),
-                        cluster_bottom - target_y0,
+                        cluster_bottom
+                        - target_y0
+                        - (
+                            self._reserved_remainder_height(
+                                cluster,
+                                index,
+                                measurements,
+                                candidate_ids_by_block,
+                                gap_scale,
+                            )
+                            if page_rect is not None
+                            else 0.0
+                        ),
+                        hard_available_height=cluster_bottom - target_y0,
                         target_y0=target_y0,
                         fit_validator=fit_validator,
                     )
@@ -372,7 +436,11 @@ class LayoutPlanner:
                     render_font_size_pt = block.font_size
                     render_line_height_pt = block.line_height_pt
                     render_letter_spacing_em = block.letter_spacing_em
-                    fallback = "toc_passthrough" if block.toc_page_number else "legacy_passthrough"
+                    fallback = (
+                        "toc_passthrough"
+                        if block.toc_page_number
+                        else "legacy_passthrough"
+                    )
                     actual_render_bbox = None
                     top_delta_pt = 0.0
                     bottom_delta_pt = 0.0
@@ -389,7 +457,9 @@ class LayoutPlanner:
                     actual_render_bbox = fitz.Rect(planned_rect)
                 post_render_overlap_pt = 0.0
                 if previous_actual_rect is not None:
-                    overlap = self._vertical_overlap(previous_actual_rect, actual_render_bbox)
+                    overlap = self._vertical_overlap(
+                        previous_actual_rect, actual_render_bbox
+                    )
                     if overlap > 0 and self._uses_pretext(block):
                         post_render_overlap_pt = round(overlap, 3)
                         shifted_y0 = target_y0 + overlap + gap
@@ -422,9 +492,7 @@ class LayoutPlanner:
                                 final_scale_used = shifted_fit.used_scale
                                 post_render_overlap_pt = 0.0
                                 fallback = (
-                                    fallback
-                                    if fallback != "none"
-                                    else "postpass_shift"
+                                    fallback if fallback != "none" else "postpass_shift"
                                 )
                         if post_render_overlap_pt > 0:
                             fallback = "postpass_overlap_overflow"
@@ -432,6 +500,7 @@ class LayoutPlanner:
                 if actual_render_bbox is not None:
                     previous_bottom = actual_render_bbox.y1
                     previous_actual_rect = fitz.Rect(actual_render_bbox)
+                previous_block = block
                 planned.append(
                     PlannedLayoutBlock(
                         block=block,
@@ -443,6 +512,7 @@ class LayoutPlanner:
                         render_line_height_pt=render_line_height_pt,
                         render_letter_spacing_em=render_letter_spacing_em,
                         vertical_shift_pt=round(target_y0 - block.render_rect.y0, 3),
+                        flow_gap_pt=round(gap, 3),
                         top_delta_pt=round(top_delta_pt, 3),
                         bottom_delta_pt=round(bottom_delta_pt, 3),
                         final_scale_used=round(final_scale_used, 3),
@@ -454,7 +524,193 @@ class LayoutPlanner:
                     )
                 )
 
+        for block in toc_blocks:
+            planned.append(
+                PlannedLayoutBlock(
+                    block=block,
+                    planned_rect=fitz.Rect(block.render_rect),
+                    actual_render_bbox=fitz.Rect(block.render_rect),
+                    pretext_line_count=block.estimated_line_count,
+                    pretext_height_pt=block.render_rect.height,
+                    render_font_size_pt=block.font_size,
+                    render_line_height_pt=block.line_height_pt,
+                    render_letter_spacing_em=block.letter_spacing_em,
+                    layout_engine="pretext",
+                    layout_fallback="toc_passthrough",
+                )
+            )
+
+        for block in fixed_blocks:
+            if self._uses_pretext(block):
+                measurement, fallback, fit_result = self._select_measurement(
+                    block,
+                    measurements,
+                    candidate_ids_by_block.get(id(block), []),
+                    (
+                        page_rect.y1 - block.render_rect.y0
+                        if page_rect is not None
+                        else block.render_rect.height
+                    ),
+                    hard_available_height=(
+                        page_rect.y1 - block.render_rect.y0
+                        if page_rect is not None
+                        else block.render_rect.height
+                    ),
+                    target_y0=block.render_rect.y0,
+                    fit_validator=fit_validator,
+                )
+                target_height = max(
+                    block.render_rect.height,
+                    float(measurement["height_pt"]) + self._safety_margin(block),
+                )
+                planned_rect = fitz.Rect(
+                    block.render_rect.x0,
+                    block.render_rect.y0,
+                    block.render_rect.x1,
+                    block.render_rect.y0 + target_height,
+                )
+                planned.append(
+                    PlannedLayoutBlock(
+                        block=block,
+                        planned_rect=planned_rect,
+                        actual_render_bbox=(
+                            fitz.Rect(fit_result.actual_render_bbox)
+                            if fit_result.actual_render_bbox is not None
+                            else None
+                        ),
+                        pretext_line_count=int(measurement["line_count"]),
+                        pretext_height_pt=float(measurement["height_pt"]),
+                        render_font_size_pt=float(measurement["font_size_pt"]),
+                        render_line_height_pt=float(measurement["line_height_pt"]),
+                        render_letter_spacing_em=measurement["letter_spacing_em"],
+                        top_delta_pt=round(fit_result.top_delta_pt, 3),
+                        bottom_delta_pt=round(fit_result.bottom_delta_pt, 3),
+                        final_scale_used=round(fit_result.used_scale, 3),
+                        layout_engine="pretext",
+                        layout_fallback=(
+                            "fixed_position" if fallback == "none" else fallback
+                        ),
+                        planner_candidate_reason=str(
+                            measurement.get("adjustment_reason", "none")
+                        ),
+                        scale_hint=float(measurement["font_scale"]),
+                    )
+                )
+                continue
+            planned.append(
+                PlannedLayoutBlock(
+                    block=block,
+                    planned_rect=fitz.Rect(block.render_rect),
+                    actual_render_bbox=fitz.Rect(block.render_rect),
+                    pretext_line_count=block.estimated_line_count,
+                    pretext_height_pt=block.render_rect.height,
+                    render_font_size_pt=block.font_size,
+                    render_line_height_pt=block.line_height_pt,
+                    render_letter_spacing_em=block.letter_spacing_em,
+                    layout_engine="pretext",
+                    layout_fallback="fixed_passthrough",
+                    planner_candidate_reason="fixed_position",
+                )
+            )
+
         return planned
+
+    def _cluster_bottom_limit(
+        self,
+        cluster: list[LayoutBlock],
+        fixed_blocks: list[LayoutBlock],
+        page_rect: fitz.Rect | None,
+    ) -> float:
+        if page_rect is None:
+            limit = max(block.render_rect.y1 for block in cluster)
+        else:
+            bottom_margin = max(12.0, min(30.0, page_rect.height * 0.03))
+            limit = page_rect.y1 - bottom_margin
+
+        cluster_top = min(block.original_rect.y0 for block in cluster)
+        cluster_left = min(block.original_rect.x0 for block in cluster)
+        cluster_right = max(block.original_rect.x1 for block in cluster)
+        cluster_width = max(cluster_right - cluster_left, 1.0)
+        for fixed in fixed_blocks:
+            rect = fixed.original_rect
+            if rect.y0 <= cluster_top:
+                continue
+            horizontal_overlap = min(cluster_right, rect.x1) - max(
+                cluster_left, rect.x0
+            )
+            if horizontal_overlap <= 0:
+                continue
+            if horizontal_overlap / min(cluster_width, max(rect.width, 1.0)) < 0.55:
+                continue
+            limit = min(limit, rect.y0 - 1.0)
+        return limit
+
+    def _reserved_remainder_height(
+        self,
+        cluster: list[LayoutBlock],
+        current_index: int,
+        measurements: dict[str, MeasurementResult],
+        candidate_ids_by_block: dict[int, list[str]],
+        gap_scale: float = 1.0,
+    ) -> float:
+        reserved = 0.0
+        previous = cluster[current_index]
+        for block in cluster[current_index + 1 :]:
+            reserved += (
+                source_vertical_gap(previous.original_rect, block.original_rect)
+                * gap_scale
+            )
+            if self._uses_pretext(block):
+                candidate_heights = [
+                    float(measurements[request_id]["height_pt"])
+                    + self._safety_margin(block)
+                    for request_id in candidate_ids_by_block.get(id(block), [])
+                ]
+                reserved += max(
+                    block.render_rect.height,
+                    min(candidate_heights, default=block.render_rect.height),
+                )
+            else:
+                reserved += block.render_rect.height
+            previous = block
+        return reserved
+
+    def _cluster_gap_scale(
+        self,
+        cluster: list[LayoutBlock],
+        cluster_bottom: float,
+        measurements: dict[str, MeasurementResult],
+        candidate_ids_by_block: dict[int, list[str]],
+    ) -> float:
+        if len(cluster) < 2:
+            return 1.0
+        content_height = 0.0
+        gap_height = 0.0
+        previous: LayoutBlock | None = None
+        for block in cluster:
+            if previous is not None:
+                gap_height += source_vertical_gap(
+                    previous.original_rect,
+                    block.original_rect,
+                )
+            if self._uses_pretext(block):
+                candidate_heights = [
+                    float(measurements[request_id]["height_pt"])
+                    + self._safety_margin(block)
+                    for request_id in candidate_ids_by_block.get(id(block), [])
+                ]
+                content_height += max(
+                    block.render_rect.height,
+                    min(candidate_heights, default=block.render_rect.height),
+                )
+            else:
+                content_height += block.render_rect.height
+            previous = block
+
+        available = cluster_bottom - cluster[0].render_rect.y0
+        if gap_height <= 0 or content_height + gap_height <= available:
+            return 1.0
+        return round(max(0.0, min(1.0, (available - content_height) / gap_height)), 6)
 
     def _measure_candidates(
         self,
@@ -521,16 +777,25 @@ class LayoutPlanner:
         candidate_ids: list[str],
         available_height: float,
         *,
+        hard_available_height: float | None = None,
         target_y0: float,
         fit_validator: FitValidator | None = None,
     ) -> tuple[MeasurementResult, str, FitValidationResult]:
         last_measurement: MeasurementResult | None = None
         last_fit_result: FitValidationResult | None = None
+        last_probed_measurement: MeasurementResult | None = None
+        last_probed_target_height = 0.0
         probe_blocked = False
+        hard_available_height = max(
+            available_height,
+            hard_available_height or available_height,
+        )
         for request_id in candidate_ids:
             measurement = measurements[request_id]
             last_measurement = measurement
-            required_height = float(measurement["height_pt"]) + self._safety_margin(block)
+            required_height = float(measurement["height_pt"]) + self._safety_margin(
+                block
+            )
             target_height = max(block.render_rect.height, required_height)
             if target_height > available_height:
                 continue
@@ -545,7 +810,9 @@ class LayoutPlanner:
                 if isinstance(fit_result, bool):
                     fit_result = FitValidationResult(
                         fits=fit_result,
-                        actual_render_bbox=fitz.Rect(candidate_rect) if fit_result else None,
+                        actual_render_bbox=fitz.Rect(candidate_rect)
+                        if fit_result
+                        else None,
                         top_delta_pt=0.0,
                         bottom_delta_pt=0.0,
                         used_scale=1.0,
@@ -561,6 +828,8 @@ class LayoutPlanner:
                     spare_height=max(candidate_rect.height - required_height, 0.0),
                 )
             last_fit_result = fit_result
+            last_probed_measurement = measurement
+            last_probed_target_height = target_height
             # A candidate is only safe when both the pretext height budget and
             # a real PyMuPDF dry-run fit agree that it will render without spill.
             if not fit_result.fits or fit_result.actual_render_bbox is None:
@@ -570,37 +839,120 @@ class LayoutPlanner:
                 probe_blocked = True
                 continue
             return measurement, str(measurement["adjustment_reason"]), fit_result
+
+        if (
+            probe_blocked
+            and fit_validator is not None
+            and last_probed_measurement is not None
+        ):
+            line_step = max(float(last_probed_measurement["line_height_pt"]), 1.0)
+            expanded_height = last_probed_target_height
+            while expanded_height < hard_available_height - 0.01:
+                expanded_height = min(
+                    hard_available_height,
+                    expanded_height + line_step,
+                )
+                expanded_rect = fitz.Rect(
+                    block.render_rect.x0,
+                    target_y0,
+                    block.render_rect.x1,
+                    target_y0 + expanded_height,
+                )
+                expanded_fit = fit_validator(
+                    block,
+                    expanded_rect,
+                    last_probed_measurement,
+                )
+                if isinstance(expanded_fit, bool):
+                    expanded_fit = FitValidationResult(
+                        fits=expanded_fit,
+                        actual_render_bbox=(
+                            fitz.Rect(expanded_rect) if expanded_fit else None
+                        ),
+                        top_delta_pt=0.0,
+                        bottom_delta_pt=0.0,
+                        used_scale=1.0,
+                        spare_height=0.0 if expanded_fit else -1.0,
+                    )
+                last_fit_result = expanded_fit
+                if (
+                    expanded_fit.fits
+                    and expanded_fit.actual_render_bbox is not None
+                    and expanded_fit.actual_render_bbox.y1
+                    <= target_y0 + hard_available_height + 0.01
+                ):
+                    expanded_measurement = dict(last_probed_measurement)
+                    expanded_measurement["height_pt"] = (
+                        expanded_height - self._safety_margin(block)
+                    )
+                    return (
+                        expanded_measurement,
+                        str(expanded_measurement["adjustment_reason"]),
+                        expanded_fit,
+                    )
+        if (
+            not probe_blocked
+            and fit_validator is not None
+            and last_measurement is not None
+        ):
+            target_height = max(
+                block.render_rect.height,
+                float(last_measurement["height_pt"]) + self._safety_margin(block),
+            )
+            if target_height <= hard_available_height:
+                hard_fit = self._revalidate_shifted_candidate(
+                    block,
+                    last_measurement,
+                    target_height,
+                    target_y0,
+                    fit_validator,
+                )
+                if (
+                    hard_fit.fits
+                    and hard_fit.actual_render_bbox is not None
+                    and hard_fit.actual_render_bbox.y1
+                    <= target_y0 + hard_available_height + 0.01
+                ):
+                    return (
+                        last_measurement,
+                        str(last_measurement["adjustment_reason"]),
+                        hard_fit,
+                    )
         if last_measurement is None:
-            return {
-                "line_count": 1,
-                "height_pt": block.render_rect.height,
-                "font_scale": 1.0,
-                "font_size_pt": block.font_size,
-                "line_height_pt": block.line_height_pt,
-                "letter_spacing_em": block.letter_spacing_em,
-                "adjustment_reason": "none",
-            }, (
-                "pymupdf_probe_overflow" if probe_blocked else "planner_overflow"
-            ), FitValidationResult(
-                fits=False,
-                actual_render_bbox=None,
-                top_delta_pt=0.0,
-                bottom_delta_pt=0.0,
-                used_scale=0.0,
-                spare_height=-1.0,
+            return (
+                {
+                    "line_count": 1,
+                    "height_pt": block.render_rect.height,
+                    "font_scale": 1.0,
+                    "font_size_pt": block.font_size,
+                    "line_height_pt": block.line_height_pt,
+                    "letter_spacing_em": block.letter_spacing_em,
+                    "adjustment_reason": "none",
+                },
+                ("pymupdf_probe_overflow" if probe_blocked else "planner_overflow"),
+                FitValidationResult(
+                    fits=False,
+                    actual_render_bbox=None,
+                    top_delta_pt=0.0,
+                    bottom_delta_pt=0.0,
+                    used_scale=0.0,
+                    spare_height=-1.0,
+                ),
             )
-        return last_measurement, (
-            "pymupdf_probe_overflow" if probe_blocked else "planner_overflow"
-        ), (
-            last_fit_result
-            or FitValidationResult(
-                fits=False,
-                actual_render_bbox=None,
-                top_delta_pt=0.0,
-                bottom_delta_pt=0.0,
-                used_scale=0.0,
-                spare_height=-1.0,
-            )
+        return (
+            last_measurement,
+            ("pymupdf_probe_overflow" if probe_blocked else "planner_overflow"),
+            (
+                last_fit_result
+                or FitValidationResult(
+                    fits=False,
+                    actual_render_bbox=None,
+                    top_delta_pt=0.0,
+                    bottom_delta_pt=0.0,
+                    used_scale=0.0,
+                    spare_height=-1.0,
+                )
+            ),
         )
 
     def _revalidate_shifted_candidate(
@@ -624,7 +976,9 @@ class LayoutPlanner:
                 top_delta_pt=0.0,
                 bottom_delta_pt=0.0,
                 used_scale=1.0,
-                spare_height=max(candidate_rect.height - float(measurement["height_pt"]), 0.0),
+                spare_height=max(
+                    candidate_rect.height - float(measurement["height_pt"]), 0.0
+                ),
             )
         candidate_rect = fitz.Rect(
             block.render_rect.x0,
@@ -653,24 +1007,85 @@ class LayoutPlanner:
             rect_getter=lambda block: block.render_rect,
         )
 
+    def _build_flow_clusters(
+        self,
+        flow_blocks: list[LayoutBlock],
+        fixed_blocks: list[LayoutBlock],
+    ) -> list[list[LayoutBlock]]:
+        segmented: list[list[LayoutBlock]] = []
+        for cluster in self._build_clusters(flow_blocks):
+            current: list[LayoutBlock] = []
+            for block in cluster:
+                if current and any(
+                    self._fixed_block_separates(current[-1], block, fixed)
+                    for fixed in fixed_blocks
+                ):
+                    segmented.append(current)
+                    current = []
+                current.append(block)
+            if current:
+                segmented.append(current)
+        return segmented
+
+    def _fixed_block_separates(
+        self,
+        upper: LayoutBlock,
+        lower: LayoutBlock,
+        fixed: LayoutBlock,
+    ) -> bool:
+        fixed_rect = fixed.original_rect
+        overlap_tolerance = max(
+            2.0,
+            min(upper.font_size, lower.font_size, fixed.font_size) * 0.25,
+        )
+        if (
+            fixed_rect.y0 < upper.original_rect.y1 - overlap_tolerance
+            or fixed_rect.y1 > lower.original_rect.y0 + overlap_tolerance
+        ):
+            return False
+        column_left = min(upper.original_rect.x0, lower.original_rect.x0)
+        column_right = max(upper.original_rect.x1, lower.original_rect.x1)
+        column_width = max(column_right - column_left, 1.0)
+        horizontal_overlap = min(column_right, fixed_rect.x1) - max(
+            column_left, fixed_rect.x0
+        )
+        return (
+            horizontal_overlap > 0
+            and horizontal_overlap / min(column_width, max(fixed_rect.width, 1.0))
+            >= 0.55
+        )
+
     def _same_column(self, rect: fitz.Rect, anchor: fitz.Rect) -> bool:
         return same_column(rect, anchor)
 
     def _uses_pretext(self, block: LayoutBlock) -> bool:
-        return (
-            not block.toc_page_number
-            and block.label.strip().lower()
-            in {"paragraph", "list item", "heading", "caption"}
-        )
+        return not block.toc_page_number and block.label.strip().lower() in {
+            "paragraph",
+            "list item",
+            "heading",
+            "caption",
+        }
 
-    def _scale_hints(self, font_size: float) -> list[float]:
+    def _scale_hints(self, font_size: float, text: str = "") -> list[float]:
         scale_hints = [1.0]
-        if font_size >= 16.0:
-            scale_hints.extend([0.96, 0.92, 0.86, 0.82, 0.74, 0.68])
-        elif font_size <= 11.5:
+        if font_size >= 16.0 or font_size <= 11.5:
             scale_hints.extend([0.96, 0.92, 0.86, 0.82, 0.74, 0.68])
         else:
             scale_hints.extend([0.96, 0.92, 0.88, 0.82, 0.76, 0.68, 0.62])
+        # The render service already clamped font_size into the configured range;
+        # shrinking past the minimum here would undo it.
+        minimum = self.settings.render_font_size_min
+        normalized_text = text.casefold()
+        if minimum > 0 and any(
+            marker in normalized_text for marker in ("http://", "https://", "www.")
+        ):
+            # ponytail: permit one small escape hatch for unbreakable URL runs.
+            minimum *= 0.96
+        if minimum > 0 and font_size > 0:
+            floor_scale = minimum / font_size
+            scale_hints = [hint for hint in scale_hints if hint >= floor_scale]
+            if not scale_hints or min(scale_hints) > floor_scale:
+                scale_hints.append(min(1.0, floor_scale))
         unique: list[float] = []
         for value in scale_hints:
             rounded = round(value, 3)
@@ -687,67 +1102,55 @@ class LayoutPlanner:
         letter_spacing_values: list[float | None] = [
             block.letter_spacing_em if block.letter_spacing_em is not None else None
         ]
-        for delta in (0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.16, 0.2):
-            tightened = round(max(base_letter_spacing - delta, -0.22), 3)
+        for delta in (0.02, 0.04, 0.06, 0.08):
+            tightened = round(max(base_letter_spacing - delta, -0.08), 3)
             candidate_value: float | None = tightened
             if abs(tightened) < 0.005:
                 candidate_value = None
             if candidate_value not in letter_spacing_values:
                 letter_spacing_values.append(candidate_value)
 
-        base_line_height_pt = max(block.line_height_pt, round(block.font_size * 1.02, 3))
-        line_height_ratios = [1.0, 0.96, 0.92, 0.88, 0.84, 0.8]
+        base_line_height_pt = max(
+            block.line_height_pt, round(block.font_size * 1.02, 3)
+        )
         candidates: list[tuple[float, TypographyCandidate]] = []
         seen: set[tuple[float, float, float | None]] = set()
-        for scale_hint in self._scale_hints(block.font_size):
+        for scale_hint in self._scale_hints(block.font_size, block.translated):
             scaled_font_size = round(block.font_size * scale_hint, 3)
-            for line_ratio in line_height_ratios:
-                scaled_line_height = round(
-                    max(
-                        scaled_font_size * 1.02,
-                        base_line_height_pt * scale_hint * line_ratio,
-                    ),
-                    3,
+            # The render service already raised this ratio to the real glyph box.
+            # Compressing it here reintroduced same-paragraph line collisions.
+            scaled_line_height = round(base_line_height_pt * scale_hint, 3)
+            for letter_spacing in letter_spacing_values:
+                candidate_key = (
+                    scaled_font_size,
+                    scaled_line_height,
+                    letter_spacing,
                 )
-                for letter_spacing in letter_spacing_values:
-                    candidate_key = (
-                        scaled_font_size,
-                        scaled_line_height,
-                        letter_spacing,
+                if candidate_key in seen:
+                    continue
+                seen.add(candidate_key)
+                adjustment_reason = self._candidate_reason(
+                    block,
+                    scale_hint,
+                    scaled_line_height,
+                    letter_spacing,
+                )
+                letter_penalty = abs((letter_spacing or 0.0) - base_letter_spacing)
+                scale_penalty = (1.0 - scale_hint) * 100.0
+                cost = scale_penalty * 10.0 + letter_penalty * 25.0
+                candidates.append(
+                    (
+                        round(cost, 6),
+                        TypographyCandidate(
+                            request_id="",
+                            font_scale=scale_hint,
+                            font_size_pt=scaled_font_size,
+                            line_height_pt=scaled_line_height,
+                            letter_spacing_em=letter_spacing,
+                            adjustment_reason=adjustment_reason,
+                        ),
                     )
-                    if candidate_key in seen:
-                        continue
-                    seen.add(candidate_key)
-                    adjustment_reason = self._candidate_reason(
-                        block,
-                        scale_hint,
-                        scaled_line_height,
-                        letter_spacing,
-                    )
-                    letter_penalty = abs((letter_spacing or 0.0) - base_letter_spacing)
-                    line_penalty = max(
-                        0.0,
-                        (base_line_height_pt * scale_hint) - scaled_line_height,
-                    )
-                    scale_penalty = (1.0 - scale_hint) * 100.0
-                    cost = (
-                        scale_penalty * 10.0
-                        + line_penalty * 4.0
-                        + letter_penalty * 25.0
-                    )
-                    candidates.append(
-                        (
-                            round(cost, 6),
-                            TypographyCandidate(
-                                request_id="",
-                                font_scale=scale_hint,
-                                font_size_pt=scaled_font_size,
-                                line_height_pt=scaled_line_height,
-                                letter_spacing_em=letter_spacing,
-                                adjustment_reason=adjustment_reason,
-                            ),
-                        )
-                    )
+                )
         candidates.sort(key=lambda item: item[0])
         return [
             TypographyCandidate(
@@ -778,11 +1181,8 @@ class LayoutPlanner:
             reasons.append("letter_spacing")
         return "+".join(reasons) or "none"
 
-    def _gap_height(self, block: LayoutBlock) -> float:
-        return max(1.0, round(block.line_height_pt * 0.12, 3))
-
     def _safety_margin(self, block: LayoutBlock) -> float:
-        return max(1.0, round(block.line_height_pt * 0.08, 3))
+        return max(2.0, round(block.line_height_pt * 0.1, 3))
 
     def _request_id(self, index: int, candidate_index: int) -> str:
         return f"{index}:{candidate_index:03d}"

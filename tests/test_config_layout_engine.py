@@ -15,7 +15,7 @@ def test_app_settings_layout_engine_defaults_to_legacy(monkeypatch, tmp_path: Pa
 
     assert settings.render_layout_engine == "legacy"
     assert settings.pretext_helper_path == ""
-    assert settings.pretext_helper_timeout_seconds == 20.0
+    assert settings.pretext_helper_timeout_seconds == 60.0
     assert settings.rate_limit_enabled is False
     assert settings.rate_limit_daily_seconds == 500
     assert settings.rate_limit_timezone == "Asia/Seoul"
@@ -57,3 +57,14 @@ def test_app_settings_reads_rate_limit_overrides(monkeypatch, tmp_path: Path) ->
     assert settings.rate_limit_timezone == "Asia/Tokyo"
     assert settings.rate_limit_storage_path == str(tmp_path / "state" / "quota.db")
     assert settings.trust_forwarded_for is False
+
+
+def test_app_settings_reads_ctranslate2_runtime(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("OPENPDF2ZH_WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("OPENPDF2ZH_CTRANSLATE2_DEVICE", "cuda")
+    monkeypatch.setenv("OPENPDF2ZH_CTRANSLATE2_COMPUTE_TYPE", "float16")
+
+    settings = AppSettings.from_env()
+
+    assert settings.ctranslate2_device == "cuda"
+    assert settings.ctranslate2_compute_type == "float16"

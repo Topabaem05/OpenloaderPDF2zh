@@ -8,7 +8,11 @@ import pytest
 
 from openpdf2zh.config import AppSettings
 from openpdf2zh.models import JobWorkspace, PipelineRequest
-from openpdf2zh.services.layout_planner import LayoutBlock, LayoutPlanner, PlannedLayoutBlock
+from openpdf2zh.services.layout_planner import (
+    LayoutBlock,
+    LayoutPlanner,
+    PlannedLayoutBlock,
+)
 from openpdf2zh.services.render_service import RenderService
 
 
@@ -16,23 +20,38 @@ class _FakePage:
     def __init__(self) -> None:
         self.insert_calls: list[dict[str, object]] = []
         self.redact_calls: list[fitz.Rect] = []
+        self.redact_fills: list[object] = []
         self.redactions_applied = False
+        self.redaction_options: dict[str, int] = {}
         self.transformation_matrix = fitz.Matrix(1, 1)
         self.rect = fitz.Rect(0, 0, 612, 792)
         self.insert_results: list[tuple[float, float]] = [(12.0, 1.0)]
         self.word_sequences: list[list[tuple[object, ...]]] = [[]]
+        self.restored_clips: list[fitz.Rect] = []
 
     def add_redact_annot(self, rect: fitz.Rect, fill) -> None:
         self.redact_calls.append(fitz.Rect(rect))
+        self.redact_fills.append(fill)
 
-    def apply_redactions(self) -> None:
+    def apply_redactions(self, **kwargs: int) -> None:
         self.redactions_applied = True
+        self.redaction_options = kwargs
 
     def insert_htmlbox(self, rect: fitz.Rect, text: str, **kwargs):
         self.insert_calls.append({"rect": fitz.Rect(rect), "text": text, **kwargs})
         if self.insert_results:
             return self.insert_results.pop(0)
         return (12.0, 1.0)
+
+    def show_pdf_page(
+        self,
+        rect: fitz.Rect,
+        source_doc,
+        page_index: int,
+        **kwargs,
+    ) -> None:
+        _ = (source_doc, page_index, kwargs)
+        self.restored_clips.append(fitz.Rect(rect))
 
     def get_text(self, mode: str):
         index = min(len(self.insert_calls), max(len(self.word_sequences) - 1, 0))
@@ -45,7 +64,9 @@ class _FakePage:
             rect = fitz.Rect(words[0][:4])
             for word in words[1:]:
                 rect |= fitz.Rect(word[:4])
-            return {"blocks": [{"type": 0, "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]}]}
+            return {
+                "blocks": [{"type": 0, "bbox": [rect.x0, rect.y0, rect.x1, rect.y1]}]
+            }
         raise ValueError(mode)
 
 
@@ -69,6 +90,12 @@ class _FakeDoc:
 
     def close(self) -> None:
         self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
 
 def _workspace(tmp_path: Path) -> JobWorkspace:
@@ -234,13 +261,15 @@ def test_render_pretext_uses_original_bbox_for_redaction_and_planned_bbox_for_re
     )
 
     service = RenderService(AppSettings(render_layout_engine="pretext"))
+
     def _fake_plan_page(
         blocks: list[LayoutBlock],
         *,
         render_font_path: str = "",
         fit_validator=None,
+        page_rect=None,
     ) -> list[PlannedLayoutBlock]:
-        _ = (render_font_path, fit_validator)
+        _ = (render_font_path, fit_validator, page_rect)
         block = blocks[0]
         planned_rect = fitz.Rect(
             block.render_rect.x0,
@@ -291,6 +320,108 @@ def test_render_pretext_uses_original_bbox_for_redaction_and_planned_bbox_for_re
     assert report["layout_engine"] == "pretext"
     assert report["layout_plan"][0]["original_bbox"] == [0.0, 0.0, 100.0, 20.0]
     assert report["layout_plan"][0]["planned_bbox"][3] > 20.0
+
+
+def test_render_pretext_keeps_fixed_preserved_text_as_a_layout_obstacle(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "content": "Body",
+                                "label": "paragraph",
+                                "bbox": [0, 0, 100, 20],
+                                "translated": "본문",
+                                "font_name": "ArialMT",
+                                "font_size": 10.0,
+                            },
+                            {
+                                "content": "Footer",
+                                "label": "paragraph",
+                                "bbox": [0, 770, 100, 780],
+                                "translated": "Footer",
+                                "font_name": "ArialMT",
+                                "font_size": 8.0,
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+    service = RenderService(AppSettings(render_layout_engine="pretext"))
+
+    def _fake_plan_page(
+        blocks: list[LayoutBlock],
+        *,
+        render_font_path: str = "",
+        fit_validator=None,
+        page_rect=None,
+    ) -> list[PlannedLayoutBlock]:
+        _ = (render_font_path, fit_validator, page_rect)
+        assert len(blocks) == 2
+        preserved = [block for block in blocks if block.label == "preserved original"]
+        assert len(preserved) == 1
+        assert preserved[0].fixed_position is True
+        return [
+            PlannedLayoutBlock(
+                block=block,
+                planned_rect=fitz.Rect(block.render_rect),
+                actual_render_bbox=fitz.Rect(block.render_rect),
+                pretext_line_count=1,
+                pretext_height_pt=block.render_rect.height,
+                render_font_size_pt=block.font_size,
+                render_line_height_pt=block.line_height_pt,
+                render_letter_spacing_em=None,
+                layout_fallback=(
+                    "fixed_passthrough" if block.fixed_position else "none"
+                ),
+            )
+            for block in blocks
+        ]
+
+    monkeypatch.setattr(service.layout_planner, "plan_page", _fake_plan_page)
+    restored: list[fitz.Rect] = []
+    monkeypatch.setattr(
+        service,
+        "_restore_original_clip",
+        lambda _page, _source, _index, rect: restored.append(fitz.Rect(rect)),
+    )
+
+    overflow = service.render(_request(workspace), workspace)
+
+    assert overflow == 0
+    assert len(fake_page.redact_calls) == 1
+    assert len(fake_page.insert_calls) == 1
+    assert restored == [fitz.Rect(0, 770, 100, 780)]
+    report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
+    assert sum(item["preserve_original"] for item in report["layout_plan"]) == 1
+
+
+def test_source_footer_rule_is_reserved_when_parser_omits_it() -> None:
+    document = fitz.open()
+    page = document.new_page(width=200, height=200)
+    page.insert_text((20, 190), "x | Preface", fontsize=8)
+    page.draw_line((20, 180), (180, 180), width=0.25)
+
+    obstacles = RenderService(AppSettings())._source_footer_obstacles(page, [])
+
+    assert any(rect.y0 == pytest.approx(180.0) for rect in obstacles)
+    assert any(rect.y0 > 180.0 for rect in obstacles)
+    document.close()
 
 
 def test_render_pretext_mode_requires_helper_when_unavailable(
@@ -381,8 +512,9 @@ def test_render_pretext_overflow_blocks_are_reported_without_rendering(
         *,
         render_font_path: str = "",
         fit_validator=None,
+        page_rect=None,
     ) -> list[PlannedLayoutBlock]:
-        _ = (render_font_path, fit_validator)
+        _ = (render_font_path, fit_validator, page_rect)
         return [
             PlannedLayoutBlock(
                 block=blocks[0],
@@ -415,6 +547,80 @@ def test_render_pretext_overflow_blocks_are_reported_without_rendering(
     report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
     assert report["overflow"][0]["fallback_reason"] == "postpass_overlap_overflow"
     assert report["overflow"][0]["post_render_overlap_pt"] == 6.0
+
+
+def test_render_pretext_restores_original_when_final_insert_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "content": "Original text",
+                                "label": "paragraph",
+                                "bbox": [0, 0, 100, 20],
+                                "translated": "번역문",
+                                "font_name": "ArialMT",
+                                "font_size": 12.0,
+                                "line_height_pt": 14.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_page.insert_results = [(-1.0, 0.0)] * 4
+    target_doc = _FakeDoc(fake_page)
+    source_doc = _FakeDoc(_FakePage())
+    opened_docs = iter((target_doc, source_doc))
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open",
+        lambda _: next(opened_docs),
+    )
+
+    service = RenderService(AppSettings(render_layout_engine="pretext"))
+
+    def _fake_plan_page(
+        blocks: list[LayoutBlock],
+        *,
+        render_font_path: str = "",
+        fit_validator=None,
+        page_rect=None,
+    ) -> list[PlannedLayoutBlock]:
+        _ = (render_font_path, fit_validator, page_rect)
+        return [
+            PlannedLayoutBlock(
+                block=blocks[0],
+                planned_rect=fitz.Rect(0, 0, 100, 20),
+                actual_render_bbox=fitz.Rect(0, 0, 100, 20),
+                pretext_line_count=1,
+                pretext_height_pt=20.0,
+                render_font_size_pt=12.0,
+                render_line_height_pt=14.0,
+                render_letter_spacing_em=None,
+                layout_fallback="none",
+            )
+        ]
+
+    monkeypatch.setattr(service.layout_planner, "plan_page", _fake_plan_page)
+
+    assert service.render(_request(workspace), workspace) == 1
+    assert fake_page.restored_clips == [fitz.Rect(0, 0, 100, 20)]
+    report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
+    assert report["layout_plan"][0]["preserve_original"] is True
+    assert (
+        report["overflow"][0]["fallback_reason"]
+        == "final_render_drift_preserved_original"
+    )
 
 
 def test_render_pretext_processes_each_page_in_multi_page_payload(
@@ -471,8 +677,9 @@ def test_render_pretext_processes_each_page_in_multi_page_payload(
         *,
         render_font_path: str = "",
         fit_validator=None,
+        page_rect=None,
     ) -> list[PlannedLayoutBlock]:
-        _ = (render_font_path, fit_validator)
+        _ = (render_font_path, fit_validator, page_rect)
         return [
             PlannedLayoutBlock(
                 block=block,
@@ -585,8 +792,9 @@ def test_render_pretext_shifts_following_blocks_after_actual_render_feedback(
         *,
         render_font_path: str = "",
         fit_validator=None,
+        page_rect=None,
     ) -> list[PlannedLayoutBlock]:
-        _ = (render_font_path, fit_validator)
+        _ = (render_font_path, fit_validator, page_rect)
         return [
             PlannedLayoutBlock(
                 block=blocks[0],
@@ -638,13 +846,136 @@ def test_render_pretext_shifts_following_blocks_after_actual_render_feedback(
 
     assert overflow == 0
     assert fake_page.insert_calls[0]["rect"] == fitz.Rect(0, 0, 100, 20)
-    assert fake_page.insert_calls[1]["rect"].y0 == pytest.approx(29.68)
+    assert fake_page.insert_calls[1]["rect"].y0 == pytest.approx(29.0)
     assert fake_page.insert_calls[2]["rect"] == fitz.Rect(140, 20, 240, 40)
 
     report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
-    assert report["layout_plan"][1]["planned_bbox"] == [0.0, 29.68, 100.0, 49.68]
+    assert report["layout_plan"][1]["planned_bbox"] == [0.0, 29.0, 100.0, 49.0]
     assert report["layout_plan"][1]["actual_render_bbox"] == [0.0, 29.68, 100.0, 45.68]
     assert report["layout_plan"][2]["planned_bbox"] == [140.0, 20.0, 240.0, 40.0]
+
+
+def test_render_feedback_does_not_shift_source_positioned_toc_rows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "order": 1,
+                                "label": "heading",
+                                "bbox": [0, 20, 100, 0],
+                                "translated": "목차",
+                                "font_name": "ArialMT",
+                                "font_size": 18.0,
+                                "line_height_pt": 20.0,
+                            },
+                            {
+                                "order": 2,
+                                "label": "paragraph",
+                                "bbox": [0, 44, 100, 30],
+                                "translated": "첫 행",
+                                "font_name": "ArialMT",
+                                "font_size": 10.0,
+                                "line_height_pt": 14.0,
+                                "toc_page_number": "1",
+                            },
+                            {
+                                "order": 3,
+                                "label": "paragraph",
+                                "bbox": [0, 56, 100, 42],
+                                "translated": "둘째 행",
+                                "font_name": "ArialMT",
+                                "font_size": 10.0,
+                                "line_height_pt": 14.0,
+                                "toc_page_number": "2",
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open",
+        lambda _: fake_doc,
+    )
+    service = RenderService(AppSettings(render_layout_engine="pretext"))
+    monkeypatch.setattr(
+        service,
+        "_element_sort_key",
+        lambda element: (float(element["order"]), 0.0),
+    )
+
+    def _fake_plan_page(
+        blocks: list[LayoutBlock],
+        *,
+        render_font_path: str = "",
+        fit_validator=None,
+        page_rect=None,
+    ) -> list[PlannedLayoutBlock]:
+        _ = (render_font_path, fit_validator, page_rect)
+        return [
+            PlannedLayoutBlock(
+                block=block,
+                planned_rect=fitz.Rect(block.render_rect),
+                actual_render_bbox=fitz.Rect(block.render_rect),
+                pretext_line_count=1,
+                pretext_height_pt=block.render_rect.height,
+                render_font_size_pt=block.font_size,
+                render_line_height_pt=block.line_height_pt,
+                render_letter_spacing_em=None,
+                layout_engine="pretext",
+                layout_fallback=(
+                    "toc_passthrough" if block.toc_page_number else "none"
+                ),
+            )
+            for block in blocks
+        ]
+
+    monkeypatch.setattr(service.layout_planner, "plan_page", _fake_plan_page)
+
+    assert service.render(_request(workspace), workspace) == 0
+    report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
+    assert report["layout_plan"][1]["planned_bbox"][1] == 30.0
+    assert report["layout_plan"][2]["planned_bbox"][1] == 42.0
+
+
+def test_narrow_label_can_use_width_above_the_next_source_baseline() -> None:
+    service = RenderService(AppSettings(render_layout_engine="pretext"))
+
+    def _block(rect: fitz.Rect, translated: str) -> LayoutBlock:
+        return LayoutBlock(
+            element={},
+            original_rect=fitz.Rect(rect),
+            render_rect=fitz.Rect(rect),
+            translated=translated,
+            label="paragraph",
+            font_size=10.0,
+            font_name="ArialMT",
+            font_family_css="'ArialMT', sans-serif",
+            estimated_line_count=1,
+            line_height_pt=14.0,
+            letter_spacing_em=None,
+            toc_page_number="",
+        )
+
+    preceding = _block(fitz.Rect(72, 420, 336, 434), "설명")
+    label = _block(fitz.Rect(72, 439, 93, 453.6), "기울임꼴")
+    next_line = _block(fitz.Rect(90, 452, 403, 466.2), "다음 줄")
+
+    service._expand_narrow_flow_blocks([preceding, label, next_line])
+
+    assert label.render_rect.x1 == 336.0
 
 
 def test_render_pretext_uses_conservative_scale_fallback_candidates(
@@ -694,8 +1025,9 @@ def test_render_pretext_uses_conservative_scale_fallback_candidates(
         *,
         render_font_path: str = "",
         fit_validator=None,
+        page_rect=None,
     ) -> list[PlannedLayoutBlock]:
-        _ = (render_font_path, fit_validator)
+        _ = (render_font_path, fit_validator, page_rect)
         return [
             PlannedLayoutBlock(
                 block=blocks[0],

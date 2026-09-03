@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections import Counter
 import html
 import json
 import re
 import shutil
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,7 @@ class RenderBlockPlan:
     letter_spacing_em: float | None
     toc_page_number: str
     shift_pt: float
+    flow_gap_pt: float
     planned_height_pt: float
     top_delta_pt: float
     bottom_delta_pt: float
@@ -49,6 +50,8 @@ class RenderBlockPlan:
     planner_candidate_reason: str
     post_render_overlap_pt: float
     render_allowed: bool
+    fixed_position: bool
+    preserve_original: bool
 
 
 class RenderService:
@@ -56,10 +59,29 @@ class RenderService:
     SPECIAL_CHARACTER_FONT_STACK = (
         "'Noto Sans Symbols 2', 'Segoe UI Symbol', 'Apple Symbols', sans-serif"
     )
+    # Only body-level text is held to the configured size range. Headings and
+    # captions carry the document's visual hierarchy, so clamping a 31.5pt title to
+    # body size destroys the layout it is supposed to preserve.
+    BODY_LABELS = frozenset({"paragraph", "list item"})
+    DISPLAY_FONT_SIZE_THRESHOLD = 16.0
+
+    CJK_FONT_FAMILY = "customcjkfont"
+    CJK_RUN_PATTERN = re.compile(
+        r"[\u1100-\u11ff\u3000-\u303f\u3130-\u318f\u3400-\u4dbf"
+        r"\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7af\uf900-\ufaff"
+        r"\uff00-\uffef]+"
+    )
+    INLINE_LITERAL_PATTERN = re.compile(
+        r"(?:(?:https?://|www\.)[^\s<>()\[\]{}]*[A-Za-z0-9/#=_~%-]|"
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})"
+    )
+    PAGE_MARKER_PATTERN = re.compile(r"^[\s\-–—|()\[\]0-9ivxlcdm]+$", re.IGNORECASE)
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.layout_planner = LayoutPlanner(settings)
+        self._cjk_font_available = False
+        self._glyph_span_em: float | None = None
 
     def render(
         self,
@@ -76,7 +98,9 @@ class RenderService:
             layout_engine = self._resolve_layout_engine()
             page_bundles = payload.get("pages", [])
             total_pages = len(page_bundles)
-            render_css, render_archive, render_font_family = self._build_render_resources()
+            render_css, render_archive, render_font_family = (
+                self._build_render_resources()
+            )
             append_run_log(
                 workspace.run_log,
                 f"render=pages total={total_pages} layout_engine={layout_engine}",
@@ -127,6 +151,7 @@ class RenderService:
                             float | None,
                             float | None,
                             str,
+                            bool,
                         ]
                     ] = []
                     for element in elements:
@@ -138,10 +163,24 @@ class RenderService:
                         rect = self._pdf_bbox_to_rect(page, bbox)
                         font_size = self._resolve_font_size(element, request.font_size)
                         font_name = str(element.get("font_name", "")).strip()
-                        estimated_line_count = self._resolve_estimated_line_count(element)
-                        line_height_pt = self._resolve_line_height_pt(element, font_size)
+                        estimated_line_count = self._resolve_estimated_line_count(
+                            element
+                        )
+                        line_height_pt = self._resolve_line_height_pt(
+                            element, font_size
+                        )
                         letter_spacing_em = self._resolve_letter_spacing_em(element)
-                        toc_page_number = str(element.get("toc_page_number", "")).strip()
+                        toc_page_number = str(
+                            element.get("toc_page_number", "")
+                        ).strip()
+                        preserve_original = self._should_preserve_original(
+                            element,
+                            translated,
+                            rect,
+                            getattr(page, "rect", None),
+                            font_size,
+                            toc_page_number,
+                        )
                         planned_elements.append(element)
                         planned.append(
                             (
@@ -154,14 +193,37 @@ class RenderService:
                                 line_height_pt,
                                 letter_spacing_em,
                                 toc_page_number,
+                                preserve_original,
                             )
                         )
 
-                    planned = self._apply_overlap_aware_letter_spacing(planned)
+                    if layout_engine == "legacy":
+                        planned = self._apply_overlap_aware_letter_spacing(planned)
+                    else:
+                        for obstacle in self._source_footer_obstacles(
+                            page,
+                            [item[0] for item in planned],
+                        ):
+                            planned_elements.append({})
+                            planned.append(
+                                (
+                                    obstacle,
+                                    "",
+                                    "preserved original",
+                                    1.0,
+                                    "",
+                                    1,
+                                    max(obstacle.height, 1.0),
+                                    None,
+                                    "",
+                                    True,
+                                )
+                            )
+                    page_rect = self._resolve_page_rect(page, planned)
                     planned_blocks = self._plan_render_blocks(
                         planned,
                         layout_engine,
-                        self._resolve_page_rect(page, planned),
+                        page_rect,
                         render_font_family,
                         render_css,
                         render_archive,
@@ -180,14 +242,38 @@ class RenderService:
                     }
 
                     current_state["planned"] = len(planned_blocks)
-                    renderable_blocks = [block for block in planned_blocks if block.render_allowed]
+                    renderable_blocks = [
+                        block
+                        for block in planned_blocks
+                        if block.render_allowed and not block.preserve_original
+                    ]
                     for block in renderable_blocks:
-                        page.add_redact_annot(block.original_rect, fill=(1, 1, 1))
+                        page.add_redact_annot(block.original_rect, fill=None)
                     if renderable_blocks:
-                        page.apply_redactions()
+                        page.apply_redactions(
+                            images=fitz.PDF_REDACT_IMAGE_NONE,
+                            graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                            text=fitz.PDF_REDACT_TEXT_REMOVE,
+                        )
+                        for block in planned_blocks:
+                            if block.preserve_original:
+                                self._restore_original_clip(
+                                    page,
+                                    workspace.input_pdf,
+                                    page_index,
+                                    block.original_rect,
+                                )
 
                     for block in planned_blocks:
                         self._check_quota(quota_guard)
+                        if block.preserve_original:
+                            layout_plan.append(
+                                self._build_layout_plan_entry(
+                                    page_index + 1,
+                                    block,
+                                )
+                            )
+                            continue
                         if (
                             block.layout_engine == "pretext"
                             and block.actual_render_bbox is not None
@@ -222,6 +308,10 @@ class RenderService:
                             and not block.toc_page_number
                             else []
                         )
+                        is_table_cell = block.label.strip().lower() in {
+                            "table cell",
+                            "table header",
+                        }
                         if block.toc_page_number:
                             spare_height, scale = self._render_toc_entry(
                                 page,
@@ -254,12 +344,27 @@ class RenderService:
                                 render_archive,
                                 block.font_size,
                                 scale_candidates=(
-                                    self._pretext_scale_candidates(block.font_size)
-                                    if layout_engine == "pretext"
+                                    [1.0, 0.92, 0.82, 0.68]
+                                    if is_table_cell
+                                    else (
+                                        self._pretext_scale_candidates(
+                                            block.font_size
+                                        )
+                                        if layout_engine == "pretext"
+                                        else None
+                                    )
+                                ),
+                                minimum_scale=(
+                                    9.0 / block.font_size
+                                    if is_table_cell and block.font_size > 0
                                     else None
                                 ),
                             )
-                        if block.layout_engine == "pretext" and not block.toc_page_number:
+                        block.final_scale_used = scale
+                        if (
+                            block.layout_engine == "pretext"
+                            and not block.toc_page_number
+                        ):
                             self._apply_final_render_metrics(
                                 block,
                                 self._extract_added_text_bbox(page, words_before),
@@ -269,7 +374,6 @@ class RenderService:
                                 column_blocks_by_id.get(block.block_id, []),
                             )
                         if block.layout_engine == "pretext":
-                            block.final_scale_used = scale
                             append_run_log(
                                 workspace.run_log,
                                 "render=final_summary "
@@ -278,10 +382,36 @@ class RenderService:
                                 f"probe_final_delta={[0.0, 0.0, 0.0, 0.0] if block.actual_render_bbox is not None else None}",
                             )
                         if spare_height == -1:
-                            if block.layout_engine == "pretext":
-                                block.fallback_reason = "final_render_drift_rejected"
+                            if is_table_cell:
+                                self._restore_original_clip(
+                                    page,
+                                    workspace.input_pdf,
+                                    page_index,
+                                    block.original_rect,
+                                )
+                                block.preserve_original = True
+                                block.fallback_reason = (
+                                    "table_cell_overflow_preserved_original"
+                                )
                                 block.fallback_detail = (
-                                    "PyMuPDF final render rejected every allowed pretext fallback scale."
+                                    "The translated table cell did not fit at 9pt; "
+                                    "the original cell clip was restored."
+                                )
+                            elif block.layout_engine == "pretext":
+                                self._restore_original_clip(
+                                    page,
+                                    workspace.input_pdf,
+                                    page_index,
+                                    block.original_rect,
+                                )
+                                block.preserve_original = True
+                                block.fallback_reason = (
+                                    "final_render_drift_preserved_original"
+                                )
+                                block.fallback_detail = (
+                                    "PyMuPDF final render rejected every allowed "
+                                    "pretext fallback scale; the original source "
+                                    "clip was restored."
                                 )
                             overflow.append(
                                 self._build_overflow_entry(
@@ -337,6 +467,23 @@ class RenderService:
             return
         quota_guard.raise_if_expired()
 
+    def _restore_original_clip(
+        self,
+        page: fitz.Page,
+        source_pdf: Path,
+        page_index: int,
+        rect: fitz.Rect,
+    ) -> None:
+        with fitz.open(str(source_pdf)) as source_doc:
+            page.show_pdf_page(
+                rect,
+                source_doc,
+                page_index,
+                clip=rect,
+                keep_proportion=False,
+                overlay=True,
+            )
+
     def _resolve_layout_engine(self) -> str:
         configured = self.settings.render_layout_engine.strip().lower()
         if configured in {"legacy", "pretext"}:
@@ -373,6 +520,7 @@ class RenderService:
             "planned_height_pt": round(block.planned_height_pt, 3),
             "shift_pt": round(block.shift_pt, 3),
             "vertical_shift_pt": round(block.shift_pt, 3),
+            "flow_gap_pt": round(block.flow_gap_pt, 3),
             "planned_font_size": round(block.font_size, 3),
             "planned_line_height_pt": (
                 round(block.line_height_pt, 3)
@@ -385,6 +533,8 @@ class RenderService:
             "final_scale_used": round(block.final_scale_used, 3),
             "planner_candidate_reason": block.planner_candidate_reason,
             "post_render_overlap_pt": round(block.post_render_overlap_pt, 3),
+            "fixed_position": block.fixed_position,
+            "preserve_original": block.preserve_original,
             "fallback_reason": block.fallback_reason,
             "fallback_detail": block.fallback_detail,
         }
@@ -414,6 +564,7 @@ class RenderService:
             "planned_height_pt": round(block.planned_height_pt, 3),
             "shift_pt": round(block.shift_pt, 3),
             "vertical_shift_pt": round(block.shift_pt, 3),
+            "flow_gap_pt": round(block.flow_gap_pt, 3),
             "planned_font_size": round(block.font_size, 3),
             "planned_line_height_pt": (
                 round(block.line_height_pt, 3)
@@ -426,6 +577,8 @@ class RenderService:
             "final_scale_used": round(block.final_scale_used, 3),
             "planner_candidate_reason": block.planner_candidate_reason,
             "post_render_overlap_pt": round(block.post_render_overlap_pt, 3),
+            "fixed_position": block.fixed_position,
+            "preserve_original": block.preserve_original,
             "layout_engine": block.layout_engine,
             "fallback_reason": block.fallback_reason,
             "fallback_detail": block.fallback_detail,
@@ -447,6 +600,7 @@ class RenderService:
         element["pretext_line_count"] = block.planned_line_count
         element["pretext_height_pt"] = round(block.planned_height_pt, 3)
         element["vertical_shift_pt"] = round(block.shift_pt, 3)
+        element["flow_gap_pt"] = round(block.flow_gap_pt, 3)
         element["top_delta_pt"] = round(block.top_delta_pt, 3)
         element["bottom_delta_pt"] = round(block.bottom_delta_pt, 3)
         element["final_scale_used"] = round(block.final_scale_used, 3)
@@ -456,11 +610,11 @@ class RenderService:
         element["post_render_overlap_pt"] = round(block.post_render_overlap_pt, 3)
         element["planned_font_size"] = round(block.font_size, 3)
         element["planned_line_height_pt"] = (
-            round(block.line_height_pt, 3)
-            if block.line_height_pt is not None
-            else None
+            round(block.line_height_pt, 3) if block.line_height_pt is not None else None
         )
         element["planned_letter_spacing_em"] = block.letter_spacing_em
+        element["fixed_position"] = block.fixed_position
+        element["preserve_original"] = block.preserve_original
 
     def _plan_render_blocks(
         self,
@@ -475,6 +629,7 @@ class RenderService:
                 float | None,
                 float | None,
                 str,
+                bool,
             ]
         ],
         layout_engine: str,
@@ -495,6 +650,7 @@ class RenderService:
                 line_height_pt,
                 letter_spacing_em,
                 toc_page_number,
+                preserve_original,
             ) = item
             blocks.append(
                 RenderBlockPlan(
@@ -512,6 +668,7 @@ class RenderService:
                     letter_spacing_em=letter_spacing_em,
                     toc_page_number=toc_page_number,
                     shift_pt=0.0,
+                    flow_gap_pt=0.0,
                     planned_height_pt=rect.height,
                     top_delta_pt=0.0,
                     bottom_delta_pt=0.0,
@@ -521,7 +678,17 @@ class RenderService:
                     fallback_detail=None,
                     planner_candidate_reason="none",
                     post_render_overlap_pt=0.0,
-                    render_allowed=True,
+                    render_allowed=not preserve_original,
+                    fixed_position=(
+                        preserve_original
+                        or label.strip().lower() in {"table cell", "table header"}
+                        or self._is_fixed_position(
+                            rect,
+                            page_rect,
+                            font_size,
+                        )
+                    ),
+                    preserve_original=preserve_original,
                 )
             )
 
@@ -539,7 +706,17 @@ class RenderService:
         self, blocks: list[RenderBlockPlan]
     ) -> list[RenderBlockPlan]:
         for block in blocks:
-            planned_rect = self._resolve_render_rect(block.original_rect, block.font_size)
+            if block.preserve_original:
+                block.planned_rect = fitz.Rect(block.original_rect)
+                block.actual_render_bbox = fitz.Rect(block.original_rect)
+                block.planned_height_pt = block.original_rect.height
+                block.layout_engine = "legacy"
+                block.fallback_reason = "preserved_original"
+                block.render_allowed = False
+                continue
+            planned_rect = self._resolve_render_rect(
+                block.original_rect, block.font_size
+            )
             block.planned_rect = planned_rect
             block.actual_render_bbox = fitz.Rect(planned_rect)
             block.shift_pt = max(0.0, planned_rect.y0 - block.original_rect.y0)
@@ -567,14 +744,14 @@ class RenderService:
             LayoutBlock(
                 element={"block_id": block.block_id},
                 original_rect=fitz.Rect(block.original_rect),
-                render_rect=fitz.Rect(
-                    self._resolve_render_rect(block.original_rect, block.font_size)
-                ),
+                render_rect=fitz.Rect(self._resolve_pretext_render_rect(block)),
                 translated=block.translated,
-                label=block.label,
+                label=(
+                    "preserved original" if block.preserve_original else block.label
+                ),
                 font_size=block.font_size,
                 font_name=block.font_name,
-                font_family_css=self._resolve_font_family_css(
+                font_family_css=self._resolve_measurement_font_family_css(
                     render_font_family,
                     block.font_name,
                 ),
@@ -582,23 +759,28 @@ class RenderService:
                 line_height_pt=block.line_height_pt or round(block.font_size * 1.2, 3),
                 letter_spacing_em=block.letter_spacing_em,
                 toc_page_number=block.toc_page_number,
+                fixed_position=block.fixed_position,
             )
             for block in blocks
         ]
+        self._expand_narrow_flow_blocks(planner_blocks)
         fit_cache: dict[tuple[object, ...], FitValidationResult] = {}
         planned_blocks = self.layout_planner.plan_page(
             planner_blocks,
             render_font_path=self.settings.render_font_path,
-            fit_validator=lambda planner_block, planned_rect, measurement: self._probe_pretext_html_fit(
-                planner_block,
-                planned_rect,
-                measurement,
-                page_rect,
-                render_font_family,
-                render_css,
-                render_archive,
-                fit_cache,
+            fit_validator=lambda planner_block, planned_rect, measurement: (
+                self._probe_pretext_html_fit(
+                    planner_block,
+                    planned_rect,
+                    measurement,
+                    page_rect,
+                    render_font_family,
+                    render_css,
+                    render_archive,
+                    fit_cache,
+                )
             ),
+            page_rect=page_rect,
         )
         planned_by_block_id: dict[str, object] = {}
         planned_fallback_queue: list[object] = []
@@ -617,7 +799,9 @@ class RenderService:
                     self._resolve_render_rect(block.original_rect, block.font_size)
                 )
                 block.actual_render_bbox = None
-                block.shift_pt = max(0.0, block.planned_rect.y0 - block.original_rect.y0)
+                block.shift_pt = max(
+                    0.0, block.planned_rect.y0 - block.original_rect.y0
+                )
                 block.planned_height_pt = block.planned_rect.height
                 block.planned_line_count = block.estimated_line_count
                 block.top_delta_pt = 0.0
@@ -644,21 +828,30 @@ class RenderService:
             block.line_height_pt = planned.render_line_height_pt
             block.letter_spacing_em = planned.render_letter_spacing_em
             block.shift_pt = planned.vertical_shift_pt
+            block.flow_gap_pt = planned.flow_gap_pt
             block.top_delta_pt = planned.top_delta_pt
             block.bottom_delta_pt = planned.bottom_delta_pt
             block.final_scale_used = planned.final_scale_used
             block.layout_engine = planned.layout_engine
-            block.fallback_reason = planned.layout_fallback
+            block.fallback_reason = (
+                "preserved_original"
+                if block.preserve_original
+                else planned.layout_fallback
+            )
             block.fallback_detail = (
                 None if planned.layout_fallback == "none" else planned.layout_fallback
             )
             block.planner_candidate_reason = planned.planner_candidate_reason
             block.post_render_overlap_pt = planned.post_render_overlap_pt
-            block.render_allowed = planned.layout_fallback not in {
-                "planner_overflow",
-                "pymupdf_probe_overflow",
-                "postpass_overlap_overflow",
-            }
+            block.render_allowed = (
+                not block.preserve_original
+                and planned.layout_fallback
+                not in {
+                    "planner_overflow",
+                    "pymupdf_probe_overflow",
+                    "postpass_overlap_overflow",
+                }
+            )
         return blocks
 
     def _probe_pretext_html_fit(
@@ -772,8 +965,10 @@ class RenderService:
         block: RenderBlockPlan,
         actual_render_bbox: fitz.Rect | None,
     ) -> None:
-        resolved_bbox = actual_render_bbox or block.actual_render_bbox or fitz.Rect(
-            block.planned_rect
+        resolved_bbox = (
+            actual_render_bbox
+            or block.actual_render_bbox
+            or fitz.Rect(block.planned_rect)
         )
         block.actual_render_bbox = fitz.Rect(resolved_bbox)
         block.top_delta_pt = round(
@@ -802,7 +997,10 @@ class RenderService:
             if not current_found:
                 continue
 
-            gap = self._gap_height_for_shift(block)
+            if block.fixed_position or block.toc_page_number:
+                break
+
+            gap = max(block.flow_gap_pt, 0.0)
             target_y0 = max(block.planned_rect.y0, previous_bottom + gap)
             delta = round(target_y0 - block.planned_rect.y0, 3)
             if delta > 0.5:
@@ -826,10 +1024,6 @@ class RenderService:
 
     def _shift_rect_vertically(self, rect: fitz.Rect, delta: float) -> fitz.Rect:
         return fitz.Rect(rect.x0, rect.y0 + delta, rect.x1, rect.y1 + delta)
-
-    def _gap_height_for_shift(self, block: RenderBlockPlan) -> float:
-        line_height_pt = block.line_height_pt or round(block.font_size * 1.2, 3)
-        return max(1.0, round(line_height_pt * 0.12, 3))
 
     def _snapshot_page_words(
         self,
@@ -922,15 +1116,28 @@ class RenderService:
         line_height_pt: float | None,
     ) -> tuple[float, float]:
         page_width = min(max(font_size * 3.2, rect.width * 0.14), rect.width * 0.24)
-        leader_width = min(max(font_size * 6.0, rect.width * 0.18), rect.width * 0.34)
+        leader_width = min(max(font_size * 2.0, rect.width * 0.08), rect.width * 0.16)
+        line_height = line_height_pt or font_size * 1.2
+        line_count = max(1, round(rect.height / max(line_height, 1.0)))
+        bottom_line_y0 = max(rect.y0, rect.y1 - line_height)
         title_rect = fitz.Rect(
             rect.x0,
             rect.y0,
             rect.x1 - page_width - leader_width,
             rect.y1,
         )
-        page_rect = fitz.Rect(rect.x1 - page_width, rect.y0, rect.x1, rect.y1)
-        leader_rect = fitz.Rect(title_rect.x1, rect.y0, page_rect.x0, rect.y1)
+        page_rect = fitz.Rect(
+            rect.x1 - page_width,
+            bottom_line_y0,
+            rect.x1,
+            rect.y1,
+        )
+        leader_rect = fitz.Rect(
+            title_rect.x1,
+            bottom_line_y0,
+            page_rect.x0,
+            rect.y1,
+        )
 
         title_html = self._build_html(
             title,
@@ -938,7 +1145,7 @@ class RenderService:
             font_size,
             render_font_family,
             source_font_name,
-            1,
+            line_count,
             line_height_pt,
             None,
         )
@@ -1006,9 +1213,21 @@ class RenderService:
         render_archive: fitz.Archive | None,
         font_size: float,
         scale_candidates: list[float] | None = None,
+        minimum_scale: float | None = None,
     ) -> tuple[float, float]:
         candidates = scale_candidates or self._scale_candidates(font_size)
-        for scale_low in candidates:
+        floor_scale = (
+            self._scale_floor(font_size)
+            if minimum_scale is None
+            else min(max(minimum_scale, 0.0), 1.0)
+        )
+        # scale_low=0 lets MuPDF shrink without limit, which crushed TOC entries to
+        # ~1.8pt. Drop candidates below the configured minimum and keep the floor
+        # itself as the tightest fit still allowed.
+        allowed = [value for value in candidates if value >= floor_scale]
+        if floor_scale > 0 and (not allowed or min(allowed) > floor_scale):
+            allowed.append(floor_scale)
+        for scale_low in allowed:
             spare_height, scale = page.insert_htmlbox(
                 rect,
                 html_block,
@@ -1021,6 +1240,16 @@ class RenderService:
             if spare_height != -1:
                 return spare_height, scale
         return -1.0, 0.0
+
+    def _scale_floor(self, font_size: float) -> float:
+        minimum = self.settings.render_font_size_min
+        if minimum <= 0 or font_size <= 0:
+            return 0.0
+        if font_size < minimum:
+            # Source text legitimately smaller than the minimum keeps the legacy
+            # free-shrink ladder so it still fits its own box.
+            return 0.0
+        return min(1.0, minimum / font_size)
 
     def _apply_overlap_aware_letter_spacing(
         self,
@@ -1035,6 +1264,7 @@ class RenderService:
                 float | None,
                 float | None,
                 str,
+                bool,
             ]
         ],
     ) -> list[
@@ -1048,6 +1278,7 @@ class RenderService:
             float | None,
             float | None,
             str,
+            bool,
         ]
     ]:
         if not self.settings.adjust_render_letter_spacing_for_overlap:
@@ -1064,6 +1295,7 @@ class RenderService:
                 float | None,
                 float | None,
                 str,
+                bool,
             ]
         ] = []
         committed_rects: list[fitz.Rect] = []
@@ -1079,6 +1311,7 @@ class RenderService:
                 line_height_pt,
                 letter_spacing_em,
                 toc_page_number,
+                preserve_original,
             ) = item
 
             adjusted_letter_spacing = letter_spacing_em
@@ -1105,6 +1338,7 @@ class RenderService:
                     line_height_pt,
                     adjusted_letter_spacing,
                     toc_page_number,
+                    preserve_original,
                 )
             )
             committed_rects.append(candidate_rect)
@@ -1187,16 +1421,187 @@ class RenderService:
 
     def _resolve_render_rect(self, rect: fitz.Rect, font_size: float) -> fitz.Rect:
         if font_size < 16.0:
-            return rect
+            # Korean runs roughly 1.3-1.6x longer than English, and the CJK face is
+            # taller per line, so body text needs room below its source box before
+            # shrinking the type is considered.
+            return fitz.Rect(
+                rect.x0,
+                rect.y0,
+                rect.x1,
+                rect.y1 + self._body_growth_allowance(rect, font_size),
+            )
 
         horizontal_padding = min(max(rect.width * 0.035, font_size * 0.2), 18.0)
         vertical_padding = min(max(rect.height * 0.15, font_size * 0.9), 28.0)
         return fitz.Rect(
             rect.x0 - horizontal_padding,
-            rect.y0 - (vertical_padding * 0.3),
+            rect.y0,
             rect.x1 + horizontal_padding,
             rect.y1 + vertical_padding,
         )
+
+    def _resolve_pretext_render_rect(self, block: RenderBlockPlan) -> fitz.Rect:
+        if block.fixed_position:
+            return fitz.Rect(block.original_rect)
+        if block.font_size >= 16.0:
+            expanded = self._resolve_render_rect(block.original_rect, block.font_size)
+            return fitz.Rect(
+                expanded.x0,
+                block.original_rect.y0,
+                expanded.x1,
+                block.original_rect.y1,
+            )
+        # Pretext measures the required height. Pre-growing every body box shifts
+        # the whole column even when the translated text already fits.
+        return fitz.Rect(block.original_rect)
+
+    def _expand_narrow_flow_blocks(self, blocks: list[LayoutBlock]) -> None:
+        body_blocks = [
+            block
+            for block in blocks
+            if not block.fixed_position
+            and not block.toc_page_number
+            and block.label.strip().lower() in self.BODY_LABELS
+        ]
+        clusters: list[list[LayoutBlock]] = []
+        for block in sorted(body_blocks, key=lambda item: item.render_rect.x0):
+            for cluster in clusters:
+                if abs(cluster[0].render_rect.x0 - block.render_rect.x0) <= 4.0:
+                    cluster.append(block)
+                    break
+            else:
+                clusters.append([block])
+
+        runs: list[list[LayoutBlock]] = []
+        for cluster in clusters:
+            for block in sorted(cluster, key=lambda item: item.original_rect.y0):
+                if (
+                    not runs
+                    or abs(runs[-1][0].render_rect.x0 - block.render_rect.x0) > 4.0
+                    or block.original_rect.y0 - runs[-1][-1].original_rect.y1
+                    > max(12.0, block.font_size * 1.5)
+                ):
+                    runs.append([block])
+                else:
+                    runs[-1].append(block)
+
+        for run in runs:
+            column_right = max(
+                block.render_rect.x1
+                for block in body_blocks
+                if abs(block.render_rect.x0 - run[0].render_rect.x0) <= 4.0
+            )
+            for block in run:
+                right_limit = column_right
+                for other in body_blocks:
+                    vertical_overlap = min(
+                        block.original_rect.y1,
+                        other.original_rect.y1,
+                    ) - max(block.original_rect.y0, other.original_rect.y0)
+                    overlap_ratio = vertical_overlap / max(
+                        min(
+                            block.original_rect.height,
+                            other.original_rect.height,
+                        ),
+                        1.0,
+                    )
+                    if (
+                        other is not block
+                        and other.original_rect.x0 > block.original_rect.x0 + 4.0
+                        and overlap_ratio >= 0.25
+                    ):
+                        right_limit = min(right_limit, other.original_rect.x0 - 2.0)
+                if right_limit - block.render_rect.x1 < block.font_size * 2.0:
+                    continue
+                block.render_rect.x1 = right_limit
+
+    def _is_fixed_position(
+        self,
+        rect: fitz.Rect,
+        page_rect: fitz.Rect,
+        font_size: float,
+    ) -> bool:
+        edge_band = max(24.0, min(72.0, page_rect.height * 0.1))
+        short_line = rect.height <= max(18.0, font_size * 2.0)
+        return short_line and rect.y1 >= page_rect.y1 - edge_band
+
+    def _source_footer_obstacles(
+        self,
+        page: fitz.Page,
+        planned_rects: list[fitz.Rect],
+    ) -> list[fitz.Rect]:
+        page_rect = getattr(page, "rect", None)
+        if not isinstance(page_rect, fitz.Rect):
+            return []
+        edge_band = max(24.0, min(72.0, page_rect.height * 0.1))
+        edge_start = page_rect.y1 - edge_band
+        obstacles: list[fitz.Rect] = []
+
+        try:
+            payload = page.get_text("dict")
+        except (AttributeError, RuntimeError, ValueError):
+            payload = {"blocks": []}
+        for block in payload.get("blocks", []):
+            for line in block.get("lines", []):
+                bbox = line.get("bbox")
+                if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                    continue
+                rect = fitz.Rect(bbox)
+                if rect.y0 < edge_start or rect.height > 18.0:
+                    continue
+                if any(
+                    rect.intersects(planned)
+                    and (rect & planned).get_area() >= rect.get_area() * 0.5
+                    for planned in planned_rects
+                ):
+                    continue
+                obstacles.append(rect)
+
+        try:
+            drawings = page.get_drawings()
+        except (AttributeError, RuntimeError, ValueError):
+            drawings = []
+        for drawing in drawings:
+            rect = fitz.Rect(drawing.get("rect", fitz.Rect()))
+            if (
+                rect.y0 >= edge_start
+                and rect.height <= 2.0
+                and rect.width >= page_rect.width * 0.25
+            ):
+                obstacles.append(
+                    fitz.Rect(rect.x0, rect.y0, rect.x1, max(rect.y1, rect.y0 + 1.0))
+                )
+        return obstacles
+
+    def _should_preserve_original(
+        self,
+        element: dict[str, object],
+        translated: str,
+        rect: fitz.Rect,
+        page_rect: fitz.Rect | None,
+        font_size: float,
+        toc_page_number: str,
+    ) -> bool:
+        source = str(element.get("content", "")).strip()
+        if source and " ".join(source.split()) == " ".join(translated.split()):
+            return True
+        if page_rect is None:
+            return False
+        return self._is_fixed_position(rect, page_rect, font_size) and bool(
+            toc_page_number or self.PAGE_MARKER_PATTERN.fullmatch(source)
+        )
+
+    def _body_growth_allowance(self, rect: fitz.Rect, font_size: float) -> float:
+        # Only widen the box when a CJK render font is in play. Without it the source
+        # font is reused, the line advance is unchanged, and the original box still
+        # holds -- so callers keep the previous exact-box behaviour.
+        if font_size <= 0 or not self.settings.render_cjk_font_path:
+            return 0.0
+        line_advance = font_size * self._render_glyph_span_em()
+        # One extra line is enough to absorb the taller CJK line advance. Anything
+        # larger cascades: the planner shifts every following block down to clear the
+        # grown box, which is what pushed blocks 245pt off their source position.
+        return round(min(line_advance, rect.height * 0.25), 3)
 
     def _build_html(
         self,
@@ -1225,30 +1630,59 @@ class RenderService:
             if letter_spacing_em is not None
             else ""
         )
+        text_color = "#fff" if label.strip().lower() == "table header" else "#111"
         return (
             f'<div style="font-family: {font_family}; font-size: {font_size}pt; '
-            f'line-height: {line_height_css}; color: #111; white-space: pre-wrap; display: block; margin: 0; padding: 0; {letter_spacing_css}">'
+            f"line-height: {line_height_css}; color: {text_color}; white-space: pre-wrap; "
+            f"word-break: keep-all; overflow-wrap: break-word; display: block; "
+            f'margin: 0; padding: 0; {letter_spacing_css}">'
             f"{safe_text}</div>"
         )
 
     def _build_render_resources(
         self,
     ) -> tuple[str | None, fitz.Archive | None, str | None]:
-        if not self.settings.render_font_path:
+        primary = self._resolve_font_file(
+            self.settings.render_font_path,
+            "OPENPDF2ZH_RENDER_FONT_PATH",
+        )
+        cjk = self._resolve_font_file(
+            self.settings.render_cjk_font_path,
+            "OPENPDF2ZH_RENDER_CJK_FONT_PATH",
+        )
+        if primary is None and cjk is None:
             return None, None, None
 
-        font_path = Path(self.settings.render_font_path).expanduser().resolve()
+        # A latin-only render font has no CJK glyphs, so MuPDF silently swaps in its
+        # own fallback (Droid Sans) and the page ends up mixing typefaces. MuPDF
+        # ignores both unicode-range and multi-family fallback lists, so CJK runs are
+        # wrapped in an explicit span instead (see _style_cjk_runs).
+        css_parts: list[str] = []
+        archive = fitz.Archive()
+        for font_path, family in (
+            (primary, "customrenderfont"),
+            (cjk, self.CJK_FONT_FAMILY),
+        ):
+            if font_path is None:
+                continue
+            css_parts.append(
+                f"@font-face {{font-family: {family}; src: url('{font_path.name}');}}"
+            )
+            # ponytail: register the single file, not its directory, so an unrelated
+            # font folder is not exposed to the renderer.
+            archive.add(font_path.read_bytes(), font_path.name)
+        self._cjk_font_available = cjk is not None
+        return "".join(css_parts), archive, ("customrenderfont" if primary else None)
+
+    def _resolve_font_file(self, configured: str, env_name: str) -> Path | None:
+        if not configured:
+            return None
+        font_path = Path(configured).expanduser().resolve()
         if not font_path.is_file():
             raise RuntimeError(
-                f"Configured render font file was not found: {font_path}. Check OPENPDF2ZH_RENDER_FONT_PATH."
+                f"Configured render font file was not found: {font_path}. Check {env_name}."
             )
-
-        font_family = "customrenderfont"
-        css = (
-            f"@font-face {{font-family: {font_family}; src: url('{font_path.name}');}}"
-        )
-        archive = fitz.Archive(str(font_path.parent))
-        return css, archive, font_family
+        return font_path
 
     def _normalize_font_family(self, source_font_name: str) -> str:
         return self._format_font_family_css(source_font_name)
@@ -1264,6 +1698,17 @@ class RenderService:
                 return resolved
         return self._format_font_family_css(source_font_name)
 
+    def _resolve_measurement_font_family_css(
+        self,
+        render_font_family: str | None,
+        source_font_name: str,
+    ) -> str:
+        family = self._resolve_font_family_css(render_font_family, source_font_name)
+        if not self._cjk_font_available:
+            return family
+        base = family.removesuffix(", sans-serif")
+        return f"{base}, '{self.CJK_FONT_FAMILY}', sans-serif"
+
     def _format_font_family_css(self, font_name: str) -> str:
         if not font_name:
             return "sans-serif"
@@ -1277,15 +1722,39 @@ class RenderService:
     ) -> float:
         value = element.get("font_size")
         if isinstance(value, (int, float)) and value > 0:
-            return float(value)
-        return fallback_size
+            source = float(value)
+        else:
+            source = fallback_size
+        label = str(element.get("label", "text")).strip().lower()
+        if label in {"table cell", "table header"}:
+            return round(min(max(source, 9.0), 11.0), 3)
+        if label not in self.BODY_LABELS or source >= self.DISPLAY_FONT_SIZE_THRESHOLD:
+            return round(source, 3)
+        return self._floor_font_size(self._clamp_font_size(source), source)
+
+    def _clamp_font_size(self, font_size: float) -> float:
+        maximum = self.settings.render_font_size_max
+        if maximum > 0:
+            font_size = min(font_size, maximum)
+        return round(font_size, 3)
+
+    def _floor_font_size(self, font_size: float, source_font_size: float) -> float:
+        """Raise body text to the minimum, but leave already-small source text alone.
+
+        Imprint pages, ISBN lines and figure credits are set below the minimum in the
+        source; enlarging them only pushes them out of their original box.
+        """
+        minimum = self.settings.render_font_size_min
+        if minimum <= 0 or source_font_size < minimum:
+            return font_size
+        return max(font_size, minimum)
 
     def _resolve_estimated_line_count(self, element: dict[str, object]) -> int:
         value = element.get("estimated_line_count")
         if isinstance(value, int) and value > 0:
             return value
         if isinstance(value, float) and value > 0:
-            return int(round(value))
+            return round(value)
         return 1
 
     def _resolve_line_height_pt(
@@ -1293,8 +1762,43 @@ class RenderService:
     ) -> float | None:
         value = element.get("line_height_pt")
         if isinstance(value, (int, float)) and value > 0:
-            return float(value)
-        return round(fallback_font_size * 1.2, 3)
+            line_height = float(value)
+        else:
+            line_height = round(fallback_font_size * 1.2, 3)
+        return self._floor_line_height_pt(line_height, fallback_font_size)
+
+    def _floor_line_height_pt(self, line_height_pt: float, font_size: float) -> float:
+        """Keep the line advance at least as tall as the render font's glyph box.
+
+        The source line height belongs to the source font. A CJK face is usually
+        taller per em (KoPubWorld Batang spans 1.54em against Times New Roman's
+        1.11em), so inheriting the source value makes consecutive lines of the same
+        paragraph physically overlap.
+        """
+        if font_size <= 0:
+            return line_height_pt
+        return round(max(line_height_pt, font_size * self._render_glyph_span_em()), 3)
+
+    def _render_glyph_span_em(self) -> float:
+        if self._glyph_span_em is not None:
+            return self._glyph_span_em
+
+        span = 0.0
+        for configured in (
+            self.settings.render_cjk_font_path,
+            self.settings.render_font_path,
+        ):
+            if not configured:
+                continue
+            try:
+                font = fitz.Font(fontfile=str(Path(configured).expanduser()))
+            except (fitz.mupdf.FzErrorBase, OSError, ValueError):
+                # An unreadable or non-font file must not break rendering; the
+                # default 1.2em advance still applies.
+                continue
+            span = max(span, font.ascender - font.descender)
+        self._glyph_span_em = span or 1.2
+        return self._glyph_span_em
 
     def _resolve_letter_spacing_em(self, element: dict[str, object]) -> float | None:
         value = element.get("letter_spacing_em")
@@ -1317,7 +1821,7 @@ class RenderService:
 
     def _style_special_characters(self, text: str, font_size: float) -> str:
         escaped = html.escape(text)
-        return self.SPECIAL_CHARACTER_PATTERN.sub(
+        styled = self.SPECIAL_CHARACTER_PATTERN.sub(
             lambda match: (
                 '<span style="'
                 f"font-family: {self.SPECIAL_CHARACTER_FONT_STACK}; "
@@ -1327,6 +1831,33 @@ class RenderService:
                 "</span>"
             ),
             escaped,
+        )
+        styled = self.INLINE_LITERAL_PATTERN.sub(
+            lambda match: (
+                (
+                    '<span style="display: inline-block; max-width: 100%; '
+                    'white-space: normal; word-break: normal; '
+                    'overflow-wrap: anywhere; vertical-align: baseline;">'
+                    f"{match.group(0)}</span>"
+                )
+                if "-" in match.group(0)
+                else match.group(0)
+            ),
+            styled,
+        )
+        return self._style_cjk_runs(styled)
+
+    def _style_cjk_runs(self, text: str) -> str:
+        if not self._cjk_font_available:
+            return text
+        return self.CJK_RUN_PATTERN.sub(
+            lambda match: (
+                f'<span style="font-family: {self.CJK_FONT_FAMILY}; '
+                'line-height: inherit; white-space: nowrap;">'
+                f"{match.group(0)}"
+                "</span>"
+            ),
+            text,
         )
 
     def _uses_paragraph_box(self, label: str) -> bool:

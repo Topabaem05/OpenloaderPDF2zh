@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 from pathlib import Path
 from urllib import error as urllib_error
@@ -7,9 +8,9 @@ from urllib import error as urllib_error
 import pytest
 
 from openpdf2zh.config import (
-    AppSettings,
     OPENROUTER_FIXED_MODEL,
     OPENROUTER_PROVIDER,
+    AppSettings,
 )
 from openpdf2zh.models import PipelineRequest
 from openpdf2zh.providers.openrouter import OpenRouterTranslator
@@ -71,7 +72,12 @@ def test_openrouter_translator_serializes_chat_completion_request(
     assert captured["content_type"] == "application/json"
     assert captured["payload"]["model"] == OPENROUTER_FIXED_MODEL
     assert captured["payload"]["temperature"] == 0
+    assert captured["payload"]["max_tokens"] == 64
+    assert captured["payload"]["reasoning_effort"] == "none"
     assert "provider" not in captured["payload"]
+    assert "Do not add source-language glosses" in captured["payload"]["messages"][0][
+        "content"
+    ]
     assert captured["payload"]["messages"][1]["content"].startswith(
         "Target language: Korean"
     )
@@ -121,6 +127,45 @@ def test_openrouter_translator_retries_timeout_then_succeeds(
     assert attempts["count"] == 2
 
 
+def test_openrouter_translator_retries_dropped_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {"choices": [{"message": {"content": "translated text"}}]}
+            ).encode("utf-8")
+
+    def _fake_urlopen(request, timeout=None):
+        _ = request, timeout
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise http.client.RemoteDisconnected("server restarted")
+        return _FakeResponse()
+
+    monkeypatch.setattr(
+        "openpdf2zh.providers.openrouter.urllib_request.urlopen",
+        _fake_urlopen,
+    )
+    monkeypatch.setattr("openpdf2zh.providers.openrouter.time.sleep", lambda _: None)
+
+    translated = OpenRouterTranslator(
+        "sk-or-v1-test",
+        api_base_url="https://openrouter.ai/api/v1/chat/completions",
+    ).translate("Hello world", target_language="Korean", model="local")
+
+    assert translated == "translated text"
+    assert attempts["count"] == 2
+
+
 def test_openrouter_translator_wraps_timeout_after_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -140,7 +185,7 @@ def test_openrouter_translator_wraps_timeout_after_retries(
 
     with pytest.raises(
         RuntimeError,
-        match="OpenRouter request timed out after 3 attempts.",
+        match="OpenRouter request timed out after 5 attempts.",
     ):
         translator.translate(
             "Hello world",

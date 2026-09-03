@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import ctranslate2
 import sentencepiece as spm
@@ -13,12 +13,12 @@ from openpdf2zh.providers.base import BaseTranslator
 
 class CTranslate2Translator(BaseTranslator):
     MIN_TRANSFORMERS_MULTILINGUAL_CTRANSLATE2_VERSION = (4, 7, 1)
-    DIRECTIONAL_MODEL_DIRS = {
+    DIRECTIONAL_MODEL_DIRS: ClassVar[dict[str, str]] = {
         "English": "quickmt-ko-en",
         "Korean": "quickmt-en-ko",
     }
     SUPPORTED_DIRECTIONAL_TARGET_LANGUAGES = frozenset(DIRECTIONAL_MODEL_DIRS)
-    TARGET_LANGUAGE_TAGS = {
+    TARGET_LANGUAGE_TAGS: ClassVar[dict[str, str]] = {
         "English": "eng_Latn",
         "Korean": "kor_Hang",
         "Japanese": "jpn_Jpan",
@@ -26,9 +26,18 @@ class CTranslate2Translator(BaseTranslator):
         "Traditional Chinese": "zho_Hant",
     }
 
-    def __init__(self, model_dir: str, tokenizer_path: str) -> None:
+    def __init__(
+        self,
+        model_dir: str,
+        tokenizer_path: str,
+        *,
+        device: str = "cpu",
+        compute_type: str = "default",
+    ) -> None:
         self._model_root = Path(model_dir).expanduser().resolve()
         self._tokenizer_path = tokenizer_path.strip()
+        self._device = device.strip() or "cpu"
+        self._compute_type = compute_type.strip() or "default"
         self._use_transformers_multilingual_tokenizer = (
             self._has_transformers_multilingual_tokenizer_assets()
         )
@@ -48,7 +57,7 @@ class CTranslate2Translator(BaseTranslator):
         if pointer_model is not None:
             self._raise_for_lfs_pointer(pointer_model)
         if (
-            not self._directional_assets_ready()
+            not self._has_directional_assets()
             and not self._tokenizer_path
             and not self._use_transformers_multilingual_tokenizer
         ):
@@ -79,8 +88,13 @@ class CTranslate2Translator(BaseTranslator):
         )
 
     def translate(self, text: str, *, target_language: str, model: str) -> str:
-        if self._directional_assets_ready():
+        if self._directional_asset_ready(target_language):
             return self._translate_directional(text, target_language)
+        if self._has_directional_assets():
+            raise RuntimeError(
+                "The local CTranslate2 bundle does not include the model for "
+                f"target language {target_language}."
+            )
         return self._translate_multilingual(text, target_language)
 
     def _translate_multilingual(self, text: str, target_language: str) -> str:
@@ -131,7 +145,9 @@ class CTranslate2Translator(BaseTranslator):
         key = "multilingual"
         if key not in self._translator_cache:
             self._translator_cache[key] = ctranslate2.Translator(
-                str(self._model_root), device="cpu"
+                str(self._model_root),
+                device=self._device,
+                compute_type=self._compute_type,
             )
         return self._translator_cache[key]
 
@@ -249,7 +265,9 @@ class CTranslate2Translator(BaseTranslator):
             model_dir = self._directional_root_dir() / model_dir_name
             self._raise_for_lfs_pointer(model_dir / "model.bin")
             self._translator_cache[model_dir_name] = ctranslate2.Translator(
-                str(model_dir), device="cpu"
+                str(model_dir),
+                device=self._device,
+                compute_type=self._compute_type,
             )
             self._source_tokenizer_cache[model_dir_name] = spm.SentencePieceProcessor(
                 model_file=str(model_dir / "src.spm.model")
@@ -264,7 +282,10 @@ class CTranslate2Translator(BaseTranslator):
             self._target_tokenizer_cache[model_dir_name],
         )
 
-    def _directional_assets_ready(self) -> bool:
+    def _directional_asset_ready(self, target_language: str) -> bool:
+        model_dir_name = self.DIRECTIONAL_MODEL_DIRS.get(target_language)
+        if model_dir_name is None:
+            return False
         directional_root = self._directional_root_dir()
         return all(
             (directional_root / model_dir_name / required_file).exists()
@@ -274,8 +295,13 @@ class CTranslate2Translator(BaseTranslator):
                     directional_root / model_dir_name / required_file
                 )
             )
-            for model_dir_name in self.DIRECTIONAL_MODEL_DIRS.values()
             for required_file in ("model.bin", "src.spm.model", "tgt.spm.model")
+        )
+
+    def _has_directional_assets(self) -> bool:
+        return any(
+            self._directional_asset_ready(target_language)
+            for target_language in self.DIRECTIONAL_MODEL_DIRS
         )
 
     def _directional_root_dir(self) -> Path:

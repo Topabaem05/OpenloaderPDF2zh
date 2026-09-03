@@ -225,3 +225,43 @@ def test_nllb_assets_raise_clear_error_with_old_ctranslate2_version(
         assert "ctranslate2>=4.7.1" in str(exc)
     else:
         raise AssertionError("Expected a clear version error for old ctranslate2.")
+
+
+def test_single_direction_bundle_uses_configured_gpu_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_root = tmp_path / "models"
+    model_dir = model_root / "quickmt-en-ko"
+    model_dir.mkdir(parents=True)
+    for name in ("model.bin", "src.spm.model", "tgt.spm.model"):
+        (model_dir / name).write_bytes(b"stub")
+    constructor_calls: list[tuple[str, str, str]] = []
+
+    def build_translator(
+        path: str,
+        *,
+        device: str,
+        compute_type: str,
+    ) -> _FakeTranslator:
+        constructor_calls.append((path, device, compute_type))
+        return _FakeTranslator(["translated"])
+
+    monkeypatch.setattr(
+        "openpdf2zh.providers.ctranslate2.ctranslate2.Translator",
+        build_translator,
+    )
+    monkeypatch.setattr(
+        "openpdf2zh.providers.ctranslate2.spm.SentencePieceProcessor",
+        lambda model_file: _FakeSentencePieceTokenizer(),
+    )
+
+    translator = CTranslate2Translator(
+        str(model_root),
+        "",
+        device="cuda",
+        compute_type="float16",
+    )
+    translator._ensure_directional_runtime("Korean")
+
+    assert constructor_calls == [(str(model_dir), "cuda", "float16")]

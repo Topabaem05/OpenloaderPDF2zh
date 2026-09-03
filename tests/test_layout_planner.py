@@ -31,9 +31,7 @@ class _FakeMeasurementClient:
             height_px = 24.0
             if text == "Left top":
                 height_px = 48.0
-            elif text == "Left bottom":
-                height_px = 18.0
-            elif text == "Right top":
+            elif text == "Left bottom" or text == "Right top":
                 height_px = 18.0
             results[request_id] = {
                 "height_px": height_px,
@@ -81,9 +79,14 @@ def test_layout_planner_shifts_later_boxes_within_same_column_cluster() -> None:
     )
 
     by_text = {item.block.translated: item for item in planned}
-    assert by_text["Left top"].planned_rect.y1 > by_text["Left top"].block.original_rect.y1
+    assert (
+        by_text["Left top"].planned_rect.y1 > by_text["Left top"].block.original_rect.y1
+    )
     assert by_text["Left bottom"].planned_rect.y0 >= by_text["Left top"].planned_rect.y1
-    assert by_text["Right top"].planned_rect.y0 == by_text["Right top"].block.original_rect.y0
+    assert (
+        by_text["Right top"].planned_rect.y0
+        == by_text["Right top"].block.original_rect.y0
+    )
     assert by_text["Left bottom"].vertical_shift_pt > 0
     assert by_text["Right top"].vertical_shift_pt == 0
 
@@ -116,11 +119,14 @@ def test_layout_planner_tightens_typography_when_height_budget_is_tight() -> Non
                 line_height_pt = float(request["line_height_px"]) * (72.0 / 96.0)
                 letter_spacing_em = request.get("letter_spacing_em")
                 spacing_bonus = 0.0
-                if isinstance(letter_spacing_em, (int, float)) and letter_spacing_em < 0:
+                if (
+                    isinstance(letter_spacing_em, (int, float))
+                    and letter_spacing_em < 0
+                ):
                     spacing_bonus = abs(float(letter_spacing_em)) * 8.0
                 height_pt = max(12.0, (line_height_pt * 2.1) - spacing_bonus)
                 results[request_id] = {
-                    "line_count": max(int(round(height_pt / max(line_height_pt, 1.0))), 1),
+                    "line_count": max(round(height_pt / max(line_height_pt, 1.0)), 1),
                     "height_pt": round(height_pt, 3),
                 }
             return results
@@ -137,12 +143,13 @@ def test_layout_planner_tightens_typography_when_height_budget_is_tight() -> Non
         ]
     )
 
-    first_block = next(item for item in planned if item.block.translated == "Crowded first block")
-    assert first_block.layout_fallback != "planner_overflow"
-    assert (
-        first_block.render_line_height_pt < first_block.block.line_height_pt
-        or (first_block.render_letter_spacing_em or 0.0) < (first_block.block.letter_spacing_em or 0.0)
+    first_block = next(
+        item for item in planned if item.block.translated == "Crowded first block"
     )
+    assert first_block.layout_fallback != "planner_overflow"
+    assert first_block.render_line_height_pt < first_block.block.line_height_pt or (
+        first_block.render_letter_spacing_em or 0.0
+    ) < (first_block.block.letter_spacing_em or 0.0)
 
 
 def test_layout_planner_uses_fit_validator_before_accepting_candidate() -> None:
@@ -189,6 +196,40 @@ def test_layout_planner_uses_fit_validator_before_accepting_candidate() -> None:
     assert planned[0].layout_fallback == "letter_spacing"
 
 
+def test_layout_planner_expands_until_real_renderer_accepts_block() -> None:
+    class _UnderestimatingMeasurementClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 1,
+                    "height_pt": 12.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_UnderestimatingMeasurementClient(),
+    )
+
+    planned = planner.plan_page(
+        [_block("Renderer needs four lines", 0.0, 0.0, 100.0, 20.0)],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+        fit_validator=lambda _block, rect, _measurement: FitValidationResult(
+            fits=rect.height >= 50.0,
+            actual_render_bbox=fitz.Rect(rect) if rect.height >= 50.0 else None,
+            top_delta_pt=0.0,
+            bottom_delta_pt=0.0,
+            used_scale=1.0,
+            spare_height=max(rect.height - 50.0, -1.0),
+        ),
+    )
+
+    assert planned[0].layout_fallback != "pymupdf_probe_overflow"
+    assert planned[0].planned_rect.height >= 50.0
+
+
 def test_layout_planner_uses_actual_render_bbox_bottom_for_following_block() -> None:
     class _FlatMeasurementClient:
         def measure_batch(self, requests, *, render_font_path: str = ""):
@@ -230,9 +271,270 @@ def test_layout_planner_uses_actual_render_bbox_bottom_for_following_block() -> 
     by_text = {item.block.translated: item for item in planned}
     assert by_text["top"].bottom_delta_pt == 8.0
     assert (
-        by_text["bottom"].planned_rect.y0
-        >= by_text["top"].actual_render_bbox.y1 + 1.0
+        by_text["bottom"].planned_rect.y0 >= by_text["top"].actual_render_bbox.y1 + 1.0
     )
+
+
+def test_layout_planner_preserves_source_gap_and_safe_line_height() -> None:
+    class _MeasuredHeightClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 2 if request["text"] == "top" else 1,
+                    "height_pt": 30.0 if request["text"] == "top" else 14.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_MeasuredHeightClient(),
+    )
+    top = _block("top", 0.0, 0.0, 100.0, 20.0)
+    bottom = _block("bottom", 0.0, 28.0, 100.0, 48.0)
+    planned = planner.plan_page(
+        [top, bottom],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+    )
+
+    by_text = {item.block.translated: item for item in planned}
+    assert (
+        by_text["bottom"].planned_rect.y0 - by_text["top"].actual_render_bbox.y1
+    ) == pytest.approx(8.0)
+    for candidate in planner._iter_candidates(top):
+        assert candidate.line_height_pt + 1e-6 >= (
+            top.line_height_pt * candidate.font_scale
+        )
+
+
+def test_layout_planner_keeps_footer_fixed_outside_body_flow() -> None:
+    class _MeasuredHeightClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 1 if request["text"] == "footer" else 5,
+                    "height_pt": 6.0 if request["text"] == "footer" else 70.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_MeasuredHeightClient(),
+    )
+    body = _block("body", 0.0, 0.0, 100.0, 40.0)
+    footer = _block("footer", 70.0, 90.0, 100.0, 98.0)
+    footer.fixed_position = True
+    planned = planner.plan_page(
+        [body, footer],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+    )
+
+    by_text = {item.block.translated: item for item in planned}
+    assert by_text["body"].actual_render_bbox.y1 < footer.original_rect.y0
+    assert by_text["footer"].planned_rect == footer.render_rect
+    assert by_text["footer"].vertical_shift_pt == 0.0
+    assert by_text["footer"].layout_fallback == "fixed_position"
+
+
+def test_layout_planner_keeps_toc_rows_at_source_coordinates() -> None:
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_FakeMeasurementClient(),
+    )
+    body = _block("Left top", 0.0, 0.0, 100.0, 20.0)
+    toc = _block("chapter", 0.0, 22.0, 100.0, 42.0)
+    toc.toc_page_number = "12"
+
+    planned = planner.plan_page(
+        [body, toc],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+    )
+
+    by_text = {item.block.translated: item for item in planned}
+    assert by_text["chapter"].planned_rect == toc.render_rect
+    assert by_text["chapter"].layout_fallback == "toc_passthrough"
+
+
+def test_layout_planner_reserves_minimum_height_for_later_blocks() -> None:
+    class _ScaledMeasurementClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 1,
+                    "height_pt": float(request["line_height_px"]) * (72.0 / 96.0),
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(
+            render_layout_engine="pretext",
+            render_font_size_min=9.0,
+        ),
+        measurement_client=_ScaledMeasurementClient(),
+    )
+    blocks = [
+        _block("first", 0.0, 0.0, 100.0, 10.0),
+        _block("second", 0.0, 11.0, 100.0, 21.0),
+        _block("third", 0.0, 22.0, 100.0, 32.0),
+    ]
+
+    planned = planner.plan_page(
+        blocks,
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 60.0),
+    )
+
+    assert all(item.layout_fallback != "planner_overflow" for item in planned)
+    assert all(item.render_font_size_pt >= 9.0 for item in planned)
+    assert planned[-1].actual_render_bbox.y1 <= 48.0
+
+
+def test_layout_planner_allows_small_url_only_font_exception() -> None:
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext", render_font_size_min=9.0)
+    )
+    normal = _block("Normal paragraph", 0.0, 0.0, 100.0, 20.0)
+    normal.font_size = 9.03
+    url = _block("Read https://example.com/path", 0.0, 0.0, 100.0, 20.0)
+    url.font_size = 9.03
+
+    normal_sizes = [candidate.font_size_pt for candidate in planner._iter_candidates(normal)]
+    url_sizes = [candidate.font_size_pt for candidate in planner._iter_candidates(url)]
+
+    assert 9.0 <= min(normal_sizes) < 9.03
+    assert min(url_sizes) == pytest.approx(8.64, abs=0.01)
+
+
+def test_layout_planner_uses_actual_height_when_reservations_are_conservative() -> None:
+    class _ConservativeMeasurementClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 1,
+                    "height_pt": 20.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_ConservativeMeasurementClient(),
+    )
+    planned = planner.plan_page(
+        [
+            _block("first", 0.0, 0.0, 100.0, 10.0),
+            _block("second", 0.0, 15.0, 100.0, 25.0),
+        ],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 52.0),
+        fit_validator=lambda _block, rect, _measurement: FitValidationResult(
+            fits=True,
+            actual_render_bbox=fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y0 + 12.0),
+            top_delta_pt=0.0,
+            bottom_delta_pt=12.0 - rect.height,
+            used_scale=1.0,
+            spare_height=max(rect.height - 12.0, 0.0),
+        ),
+    )
+
+    assert all(item.layout_fallback != "planner_overflow" for item in planned)
+    assert planned[-1].actual_render_bbox.y1 <= 40.0
+
+
+def test_layout_planner_compresses_gaps_before_crossing_footer() -> None:
+    class _DenseMeasurementClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 1,
+                    "height_pt": 12.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext", render_font_size_min=9.0),
+        measurement_client=_DenseMeasurementClient(),
+    )
+    blocks = [
+        _block("first", 0.0, 0.0, 100.0, 10.0),
+        _block("second", 0.0, 18.0, 100.0, 28.0),
+        _block("third", 0.0, 36.0, 100.0, 46.0),
+    ]
+    footer = _block("footer", 0.0, 48.0, 100.0, 56.0)
+    footer.fixed_position = True
+
+    planned = planner.plan_page(
+        [*blocks, footer],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+    )
+
+    by_text = {item.block.translated: item for item in planned}
+    assert all(
+        by_text[text].layout_fallback != "planner_overflow"
+        for text in ("first", "second", "third")
+    )
+    assert by_text["third"].actual_render_bbox.y1 < footer.original_rect.y0
+    compressed_gap = (
+        by_text["second"].planned_rect.y0 - by_text["first"].actual_render_bbox.y1
+    )
+    assert compressed_gap < 8.0
+
+
+def test_layout_planner_splits_flow_around_preserved_middle_block() -> None:
+    class _MiddleObstacleMeasurementClient:
+        def measure_batch(self, requests, *, render_font_path: str = ""):
+            _ = render_font_path
+            return {
+                str(request["request_id"]): {
+                    "line_count": 2 if request["text"] == "top" else 1,
+                    "height_pt": 30.0 if request["text"] == "top" else 12.0,
+                }
+                for request in requests
+            }
+
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_MiddleObstacleMeasurementClient(),
+    )
+    top = _block("top", 0.0, 0.0, 100.0, 20.0)
+    preserved = _block("preserved", 0.0, 35.0, 100.0, 45.0)
+    preserved.label = "preserved original"
+    preserved.fixed_position = True
+    bottom = _block("bottom", 0.0, 50.0, 100.0, 70.0)
+
+    planned = planner.plan_page(
+        [top, preserved, bottom],
+        page_rect=fitz.Rect(0.0, 0.0, 100.0, 100.0),
+    )
+
+    by_text = {item.block.translated: item for item in planned}
+    assert by_text["top"].actual_render_bbox.y1 < preserved.original_rect.y0
+    assert by_text["bottom"].planned_rect.y0 >= bottom.original_rect.y0
+    assert by_text["bottom"].layout_fallback != "planner_overflow"
+
+
+def test_layout_planner_allows_small_source_bbox_overlap_at_fixed_separator() -> None:
+    planner = LayoutPlanner(
+        AppSettings(render_layout_engine="pretext"),
+        measurement_client=_FakeMeasurementClient(),
+    )
+    upper = _block("upper", 0.0, 0.0, 100.0, 20.0)
+    fixed = _block("fixed", 0.0, 23.0, 40.0, 35.0)
+    fixed.fixed_position = True
+    lower = _block("lower", 10.0, 33.5, 100.0, 50.0)
+
+    clusters = planner._build_flow_clusters([upper, lower], [fixed])
+
+    assert [[block.translated for block in cluster] for cluster in clusters] == [
+        ["upper"],
+        ["lower"],
+    ]
 
 
 def test_pretext_measurement_client_requires_helper_script(tmp_path: Path) -> None:
@@ -259,7 +561,10 @@ def test_pretext_measurement_client_normalizes_node_helper_output(
 ) -> None:
     helper_script = tmp_path / "measure.mjs"
     helper_script.write_text("export {};\n", encoding="utf-8")
-    client = PretextMeasurementClient(helper_path=str(helper_script))
+    client = PretextMeasurementClient(
+        helper_path=str(helper_script),
+        render_cjk_font_path="/tmp/cjk.ttf",
+    )
 
     class _CompletedProcess:
         returncode = 0
@@ -302,6 +607,7 @@ def test_pretext_measurement_client_normalizes_node_helper_output(
 
     assert captured["command"][1] == str(helper_script)
     assert captured["payload"]["render_font_path"] == "/tmp/font.ttf"
+    assert captured["payload"]["render_cjk_font_path"] == "/tmp/cjk.ttf"
     assert captured["payload"]["requests"][0]["request_id"] == "request-1:1.000"
     assert captured["payload"]["requests"][0]["letter_spacing_em"] == -0.1
     assert results["request-1:1.000"]["height_px"] == 28.5

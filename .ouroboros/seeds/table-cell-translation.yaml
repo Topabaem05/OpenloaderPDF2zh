@@ -1,0 +1,66 @@
+goal: >-
+  Translate born-digital PDF table cells while preserving cell coordinates,
+  grid lines, numeric and formula literals, and 9-11pt typography.
+repository_root: /Users/guribbong/Documents/Codex/2026-08-30/https-github-com-topabaem05-openloaderpdf2zh-https/work/repo
+scope:
+  include:
+    - PyMuPDF table detection inside high-confidence table regions
+    - merged-cell deduplication and cell TranslationUnit creation
+    - per-cell render fallback to the original PDF clip
+    - unit and real-PDF regression checks
+  exclude:
+    - OCR and scanned tables
+    - table grid or row-height reflow
+    - new table-extraction or ML dependencies
+constraints:
+  - Reuse the installed PyMuPDF and the current translation/render pipeline.
+  - Preserve existing dirty-worktree changes.
+  - Never run full-page text-strategy table detection.
+  - Prefer false-negative fallback to changing non-table text.
+  - Record the initial git status and do not reset, clean, checkout, or edit unrelated dirty files.
+  - Target whitelist is .ouroboros/seeds/table-cell-translation.yaml, src/openpdf2zh/services/translation_service.py, src/openpdf2zh/services/render_service.py, tests/test_translation_service.py, tests/test_render_service.py, and tools/benchmark_table_cells.py.
+  - Before editing, use git status --porcelain=v1 -z -uall as the NUL-safe path manifest, copy every listed tracked or untracked file under /tmp/openpdf2zh-table-cell-baseline/files with its repository-relative path, and store sorted SHA-256 lines in /tmp/openpdf2zh-table-cell-baseline/all.sha256 plus git diff --binary in diff.patch.
+tasks:
+  - In TranslationService._restore_source_rows, immediately after _extract_source_lines and before TOC restoration, call a new private helper that creates table cells; translate_document remains the only caller of _restore_source_rows in production.
+  - Build clips from units where label.strip().casefold contains table, block unions returned by the existing _source_table_block_indexes, page.find_tables strategy=lines bboxes, and page.get_drawings rectangles with height at most 2pt and width at least 18 percent of the page width.
+  - Group horizontal rules only when successive y gaps are at most 100pt and both x0 and x1 differ from the group anchor by at most 8pt; require at least three rules and pad their union by 2pt inside page bounds.
+  - Deduplicate clips at intersection-over-minimum-area at least 0.8 by keeping the larger clip, then the lexicographically smaller rounded x0,y0,x1,y1 tuple on equal area.
+  - Inside each clip, call page.find_tables with clip=clip, min_words_vertical=2, min_words_horizontal=1 and the ordered strategy pairs lines/lines, lines_strict/lines_strict, text/lines, lines/text, text/text; never use a text strategy without clip.
+  - Assign each source word to a cell only when its center point is inside the cell. Use every word whose center is inside the clip as the coverage denominator.
+  - Accept only 2x2-or-larger structures with positive cell areas, at least 98 percent unique word coverage, zero multiply-owned words, and no intersection above 1 square point between distinct cells.
+  - Canonicalize bboxes by rounding each coordinate to the nearest 0.5pt before set deduplication. Sort accepted candidates by descending covered-word count, ascending physical-cell count, ordered strategy index, and rounded bbox tuple; discard later candidates at intersection-over-minimum-area at least 0.8.
+  - Add _source_table_cells(page, page_number, page_units, source_lines) returning a list of TranslationUnit and page diagnostics. For each non-empty canonical cell set unit_id empty, page_number unchanged, bbox converted to bottom-left PDF coordinates, original to words sorted by block/line/word indexes and joined by one ASCII space, font_size to the maximum overlapping source-line size, font_name to the first overlapping source line, estimated_line_count at least one, and existing line-height logic. Use table header only when every RGB byte of the source font color is at least 192; otherwise use table cell.
+  - In TranslationService._should_preserve_unit, use ASCII fullmatch character class [0-9A-Za-z_.,:;+*/^=<>%|(){}\\[\\]\\\\\\-\\s] for table cells up to 80 characters. Require a digit or one of = + * / ^ < > %. Define alphabetic tokens by [A-Za-z]+; allow at most two without one of = + * / ^ < > and at most four with one. Exact preservation means Python string equality and zero translator calls.
+  - In RenderService._resolve_font_size clamp table cell and table header labels to 9-11pt. In RenderService.render pass minimum_scale=9.0/block.font_size to _insert_with_scale_policy; immediately after it returns spare_height=-1, call _restore_original_clip(page, workspace.input_pdf, page_index, block.original_rect), set preserve_original true and fallback_reason to table_cell_overflow_preserved_original before _update_element_layout_metadata writes element layout_fallback.
+  - Add focused synthetic and real-PDF checks without adding dependencies.
+acceptance_criteria:
+  - id: AC1
+    criterion: A 2x3 ruled synthetic table is restored as exactly six unique table-cell units whose bbox coordinates differ from source cell borders by at most 1pt.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py -q
+  - id: AC2
+    criterion: A clipped 2x2 borderless fixture assigns every source word to exactly one cell with at least 98 percent coverage; a merged-header fixture emits one unit per unique non-empty physical bbox.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py -q
+  - id: AC3
+    criterion: A normal two-column body fixture emits zero new table-cell units.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py -q
+  - id: AC4
+    criterion: Table-cell source sizes below 9pt, within 9-11pt, and above 11pt resolve to 9pt, unchanged in-range size, and 11pt respectively; every successful effective render size remains 9-11pt.
+    verification: .venv/bin/python -m pytest tests/test_render_service.py -q
+  - id: AC5
+    criterion: A table cell that cannot fit at 9pt restores exactly its own original bbox, leaves PDF line-art redaction disabled, and records the exact reason table_cell_overflow_preserved_original.
+    verification: .venv/bin/python -m pytest tests/test_render_service.py -q
+  - id: AC5b
+    criterion: Table cells containing 42, 1.25, 50%, and x = y + 1 bypass the translator and remain byte-for-byte identical.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py -q
+  - id: AC5c
+    criterion: The translatable sentence Model 1 improves accuracy does not match the table literal grammar.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py -q
+  - id: AC6
+    criterion: Existing translation and render tests plus focused Ruff checks pass.
+    verification: .venv/bin/python -m pytest tests/test_translation_service.py tests/test_render_service.py -q && .venv/bin/python -m ruff check src/openpdf2zh/services/translation_service.py src/openpdf2zh/services/render_service.py tests/test_translation_service.py tests/test_render_service.py
+  - id: AC7
+    criterion: A checked-in provider-free diagnostic records each input SHA-256, rejects missing files, and writes an object with integer schema_version and documents array. Each document has string name, path, sha256 and pages array. Each page has integer page, accepted_tables, nonempty_cells, duplicate_words, intersecting_cells, source_drawings, blank_pages and numeric coverage. Every accepted table independently requires coverage at least 0.98 and zero duplicates and intersections. Linux pages 21, 22, and 32 require at least 5 nonempty table cells each. OLMo page 3 requires at least 2 accepted tables and pages 6 and 8 at least 1 each. The command exits nonzero on any missing field, input, minimum, or invariant.
+    verification: .venv/bin/python tools/benchmark_table_cells.py --linux /Users/guribbong/Documents/Codex/2026-08-30/https-github-com-topabaem05-openloaderpdf2zh-https/work/v100_batch/v100-linux-p1-35/input/Practical\ Linux\ System\ Administration\ A\ Guide\ to\ Installation,\ Configuration,\ and\ Management\ \(Kenneth\ Hess\)\ \(z-library.sk,\ 1lib.sk,\ z-lib.sk\).pdf --olmo /Users/guribbong/Documents/Codex/2026-08-30/https-github-com-topabaem05-openloaderpdf2zh-https/work/arxiv_samples/olmo-2402.00838v4/input/olmo-2402.00838v4.pdf --output /Users/guribbong/Documents/Codex/2026-08-30/https-github-com-topabaem05-openloaderpdf2zh-https/work/benchmarks/pdf2zh-comparison/table-cell-runtime-diagnostics.json
+  - id: AC8
+    criterion: Postflight recomputes the NUL-safe status path set. Every baseline path must remain. Hashes for paths outside the whitelist must equal /tmp/openpdf2zh-table-cell-baseline/all.sha256. For whitelisted pre-existing files, compare each saved baseline copy to the final file and review that the delta contains only this Seed's named functions and tests.
+    verification: Fail on a missing baseline path or unrelated hash mismatch, then inspect diff --no-index between saved whitelist copies and final files before completion.

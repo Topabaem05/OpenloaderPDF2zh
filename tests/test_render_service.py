@@ -6,8 +6,8 @@ from pathlib import Path
 import fitz
 
 from openpdf2zh.config import AppSettings
-from openpdf2zh.services.layout_planner import LayoutBlock, PlannedLayoutBlock
 from openpdf2zh.models import JobWorkspace, PipelineRequest
+from openpdf2zh.services.layout_planner import LayoutBlock, PlannedLayoutBlock
 from openpdf2zh.services.render_service import RenderService
 
 
@@ -15,15 +15,19 @@ class _FakePage:
     def __init__(self) -> None:
         self.insert_calls: list[dict[str, object]] = []
         self.redact_calls: list[fitz.Rect] = []
+        self.redact_fills: list[object] = []
         self.redactions_applied = False
+        self.redaction_options: dict[str, int] = {}
         self.transformation_matrix = fitz.Matrix(1, 1)
         self.insert_results: list[tuple[float, float]] = [(10.0, 1.0)]
 
     def add_redact_annot(self, rect, fill) -> None:
         self.redact_calls.append(rect)
+        self.redact_fills.append(fill)
 
-    def apply_redactions(self) -> None:
+    def apply_redactions(self, **kwargs: int) -> None:
         self.redactions_applied = True
+        self.redaction_options = kwargs
 
     def insert_htmlbox(self, rect, text, **kwargs):
         self.insert_calls.append({"rect": rect, "text": text, **kwargs})
@@ -140,6 +144,12 @@ def test_render_service_uses_element_font_size_and_custom_font(
 
     assert overflow == 0
     assert fake_page.redactions_applied is True
+    assert fake_page.redact_fills == [None]
+    assert fake_page.redaction_options == {
+        "images": fitz.PDF_REDACT_IMAGE_NONE,
+        "graphics": fitz.PDF_REDACT_LINE_ART_NONE,
+        "text": fitz.PDF_REDACT_TEXT_REMOVE,
+    }
     assert len(fake_page.insert_calls) == 1
     call = fake_page.insert_calls[0]
     assert "font-size: 18.5pt" in call["text"]
@@ -225,8 +235,230 @@ def test_render_service_renders_toc_entry_as_title_leader_and_page(
     assert overflow == 0
     assert len(fake_page.insert_calls) == 3
     assert "Introduction" in fake_page.insert_calls[0]["text"]
+    assert fake_page.insert_calls[0]["rect"].width >= 120 * 0.6
     assert "xv" in fake_page.insert_calls[1]["text"]
     assert "." in fake_page.insert_calls[2]["text"]
+
+
+def test_render_service_aligns_wrapped_toc_page_number_to_last_line(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "label": "paragraph",
+                                "bbox": [0, 0, 160, 24],
+                                "translated": "A long translated title that wraps",
+                                "toc_page_number": "187",
+                                "font_name": "ArialMT",
+                                "font_size": 10.0,
+                                "estimated_line_count": 2,
+                                "line_height_pt": 12.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings())
+    overflow = service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="English",
+            provider="openrouter",
+            model="dummy-model",
+        ),
+        workspace,
+    )
+
+    assert overflow == 0
+    assert len(fake_page.insert_calls) == 3
+    title_rect = fake_page.insert_calls[0]["rect"]
+    page_rect = fake_page.insert_calls[1]["rect"]
+    leader_rect = fake_page.insert_calls[2]["rect"]
+    assert title_rect.y0 == 0
+    assert title_rect.y1 == 24
+    assert page_rect.y0 == 12
+    assert leader_rect.y0 == 12
+
+
+def test_render_service_keeps_table_header_fixed_and_white(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "content": "Directory Description",
+                                "label": "table header",
+                                "bbox": [10, 10, 140, 22],
+                                "translated": "디렉터리 설명",
+                                "font_name": "ArialMT",
+                                "font_size": 11.0,
+                                "estimated_line_count": 1,
+                                "line_height_pt": 12.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_page.insert_results = [(-1.0, 1.0), (-1.0, 0.92), (4.0, 0.82)]
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+
+    service = RenderService(AppSettings(render_layout_engine="pretext"))
+    assert service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="Korean",
+            provider="openrouter",
+            model="dummy-model",
+        ),
+        workspace,
+    ) == 0
+
+    assert [call["scale_low"] for call in fake_page.insert_calls] == [1.0, 0.92, 0.82]
+    assert fake_page.insert_calls[0]["rect"] == fitz.Rect(10, 10, 140, 22)
+    assert "color: #fff" in fake_page.insert_calls[0]["text"]
+    report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
+    assert report["layout_plan"][0]["fixed_position"] is True
+
+
+def test_render_service_clamps_table_font_size_to_nine_and_eleven() -> None:
+    service = RenderService(AppSettings())
+
+    assert service._resolve_font_size({"label": "table cell", "font_size": 7}, 10) == 9
+    assert service._resolve_font_size({"label": "table cell", "font_size": 10}, 10) == 10
+    assert service._resolve_font_size({"label": "table header", "font_size": 14}, 10) == 11
+
+
+def test_render_service_restores_only_overflowing_table_cell(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.structured_json.write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page": 1,
+                        "elements": [
+                            {
+                                "content": "Long table value",
+                                "label": "table cell",
+                                "bbox": [10, 10, 80, 22],
+                                "translated": "셀에 들어가지 않는 매우 긴 번역문",
+                                "font_name": "ArialMT",
+                                "font_size": 11.0,
+                                "estimated_line_count": 1,
+                                "line_height_pt": 12.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_page = _FakePage()
+    fake_page.insert_results = [(-1.0, 0.0)] * 6
+    fake_doc = _FakeDoc(fake_page)
+    monkeypatch.setattr(
+        "openpdf2zh.services.render_service.fitz.open", lambda _: fake_doc
+    )
+    restored: list[fitz.Rect] = []
+    service = RenderService(AppSettings(render_layout_engine="legacy"))
+    monkeypatch.setattr(
+        service,
+        "_restore_original_clip",
+        lambda _page, _source, _index, rect: restored.append(fitz.Rect(rect)),
+    )
+
+    assert service.render(
+        PipelineRequest(
+            input_pdf=workspace.input_pdf,
+            target_language="Korean",
+            provider="openrouter",
+            model="dummy-model",
+        ),
+        workspace,
+    ) == 1
+
+    assert restored == [fitz.Rect(10, 10, 80, 22)]
+    assert min(call["scale_low"] for call in fake_page.insert_calls) >= 9 / 11
+    assert fake_page.redaction_options["graphics"] == fitz.PDF_REDACT_LINE_ART_NONE
+    report = json.loads(workspace.render_report_json.read_text(encoding="utf-8"))
+    assert report["layout_plan"][0]["fallback_reason"] == (
+        "table_cell_overflow_preserved_original"
+    )
+    payload = json.loads(workspace.structured_json.read_text(encoding="utf-8"))
+    assert payload["pages"][0]["elements"][0]["layout_fallback"] == (
+        "table_cell_overflow_preserved_original"
+    )
+
+
+def test_render_service_widens_isolated_body_line_to_its_column() -> None:
+    service = RenderService(AppSettings())
+    full = LayoutBlock(
+        element={},
+        original_rect=fitz.Rect(10, 10, 200, 30),
+        render_rect=fitz.Rect(10, 10, 200, 30),
+        translated="Full width paragraph",
+        label="paragraph",
+        font_size=10.0,
+        font_name="ArialMT",
+        font_family_css="'ArialMT', sans-serif",
+        estimated_line_count=1,
+        line_height_pt=12.0,
+        letter_spacing_em=None,
+        toc_page_number="",
+    )
+    narrow = LayoutBlock(
+        element={},
+        original_rect=fitz.Rect(10, 100, 80, 112),
+        render_rect=fitz.Rect(10, 100, 80, 112),
+        translated="Translated line",
+        label="paragraph",
+        font_size=10.0,
+        font_name="ArialMT",
+        font_family_css="'ArialMT', sans-serif",
+        estimated_line_count=1,
+        line_height_pt=12.0,
+        letter_spacing_em=None,
+        toc_page_number="",
+    )
+
+    service._expand_narrow_flow_blocks([full, narrow])
+
+    assert narrow.render_rect.x1 == 200
 
 
 def test_render_service_processes_each_page_in_multi_page_payload(
@@ -631,7 +863,9 @@ def test_render_service_pretext_uses_planned_bbox_and_richer_report(
     monkeypatch.setattr(
         service.layout_planner,
         "plan_page",
-        lambda blocks, render_font_path="", fit_validator=None: [planned_block],
+        lambda blocks, render_font_path="", fit_validator=None, page_rect=None: [
+            planned_block
+        ],
     )
 
     overflow = service.render(
@@ -698,7 +932,7 @@ def test_render_service_pretext_applies_adjusted_typography_and_tries_full_scale
     monkeypatch.setattr(
         service.layout_planner,
         "plan_page",
-        lambda blocks, render_font_path="", fit_validator=None: [
+        lambda blocks, render_font_path="", fit_validator=None, page_rect=None: [
             PlannedLayoutBlock(
                 block=blocks[0],
                 planned_rect=fitz.Rect(0, 0, 80, 26),

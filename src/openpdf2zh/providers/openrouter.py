@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import http.client
 import json
-import socket
 import time
 from typing import Any
 from urllib import error as urllib_error
@@ -11,12 +11,13 @@ from openpdf2zh.providers.base import BaseTranslator
 
 
 class OpenRouterTranslator(BaseTranslator):
-    MAX_ATTEMPTS = 3
+    MAX_ATTEMPTS = 5
     RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
     SYSTEM_PROMPT = (
         "You are a translation engine for PDF text extraction. "
         "Translate the user text into the requested language. "
         "Preserve meaning, list markers, numbering, and line breaks when possible. "
+        "Do not add source-language glosses in parentheses unless the source has them. "
         "Return only the translated text."
     )
 
@@ -37,6 +38,8 @@ class OpenRouterTranslator(BaseTranslator):
         payload = {
             "model": model,
             "temperature": 0,
+            "max_tokens": min(max(len(text), 64), 2048),
+            "reasoning_effort": "none",
             "messages": [
                 {"role": "system", "content": self.SYSTEM_PROMPT},
                 {
@@ -92,7 +95,7 @@ class OpenRouterTranslator(BaseTranslator):
                 raise RuntimeError(
                     f"OpenRouter request failed with status {exc.code}: {detail}"
                 ) from exc
-            except (TimeoutError, socket.timeout) as exc:
+            except TimeoutError as exc:
                 last_error = exc
                 if attempt < self.MAX_ATTEMPTS:
                     self._sleep_before_retry(attempt)
@@ -100,12 +103,21 @@ class OpenRouterTranslator(BaseTranslator):
                 raise RuntimeError(
                     f"OpenRouter request timed out after {self.MAX_ATTEMPTS} attempts."
                 ) from exc
+            except (http.client.RemoteDisconnected, ConnectionResetError) as exc:
+                last_error = exc
+                if attempt < self.MAX_ATTEMPTS:
+                    self._sleep_before_retry(attempt)
+                    continue
+                raise RuntimeError(
+                    "OpenRouter connection dropped after "
+                    f"{self.MAX_ATTEMPTS} attempts."
+                ) from exc
             except urllib_error.URLError as exc:
                 last_error = exc
+                if attempt < self.MAX_ATTEMPTS:
+                    self._sleep_before_retry(attempt)
+                    continue
                 if self._is_timeout_reason(exc.reason):
-                    if attempt < self.MAX_ATTEMPTS:
-                        self._sleep_before_retry(attempt)
-                        continue
                     raise RuntimeError(
                         f"OpenRouter request timed out after {self.MAX_ATTEMPTS} attempts."
                     ) from exc
@@ -119,7 +131,7 @@ class OpenRouterTranslator(BaseTranslator):
         time.sleep(float(attempt))
 
     def _is_timeout_reason(self, reason: object) -> bool:
-        if isinstance(reason, (TimeoutError, socket.timeout)):
+        if isinstance(reason, TimeoutError):
             return True
         if isinstance(reason, str):
             return "timed out" in reason.lower() or "timeout" in reason.lower()
@@ -149,10 +161,10 @@ class OpenRouterTranslator(BaseTranslator):
             raise RuntimeError("OpenRouter response did not include any choices.")
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
-            raise RuntimeError("OpenRouter choice payload is malformed.")
+            raise TypeError("OpenRouter choice payload is malformed.")
         message = first_choice.get("message")
         if not isinstance(message, dict):
-            raise RuntimeError("OpenRouter message payload is malformed.")
+            raise TypeError("OpenRouter message payload is malformed.")
         content = message.get("content")
         if isinstance(content, str):
             return content

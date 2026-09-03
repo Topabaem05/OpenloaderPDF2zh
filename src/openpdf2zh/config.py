@@ -117,10 +117,13 @@ class AppSettings:
     duplicate_box_iom_threshold: float = 0.9
     base_font_size: float = 10.0
     render_font_path: str = ""
+    render_cjk_font_path: str = ""
+    render_font_size_min: float = 0.0
+    render_font_size_max: float = 0.0
     render_layout_engine: str = "legacy"
     adjust_render_letter_spacing_for_overlap: bool = True
     pretext_helper_path: str = ""
-    pretext_helper_timeout_seconds: float = 20.0
+    pretext_helper_timeout_seconds: float = 60.0
     job_queue_concurrency: int = 2
     job_queue_max_size: int = 8
     workspace_retention_hours: float = 24.0
@@ -133,6 +136,8 @@ class AppSettings:
     cors_allowed_origins: tuple[str, ...] = ()
     ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
+    ctranslate2_device: str = "cpu"
+    ctranslate2_compute_type: str = "default"
     openrouter_api_base_url: str = OPENROUTER_API_BASE_URL
 
     @property
@@ -140,7 +145,7 @@ class AppSettings:
         return self.workspace_root / "public"
 
     @classmethod
-    def from_env(cls) -> "AppSettings":
+    def from_env(cls) -> AppSettings:
         railway_port = os.getenv("PORT")
         if railway_port:
             host = "0.0.0.0"
@@ -186,6 +191,17 @@ class AppSettings:
             ),
             base_font_size=float(os.getenv("OPENPDF2ZH_BASE_FONT_SIZE", "10.0")),
             render_font_path=os.getenv("OPENPDF2ZH_RENDER_FONT_PATH", "").strip(),
+            render_cjk_font_path=os.getenv(
+                "OPENPDF2ZH_RENDER_CJK_FONT_PATH", ""
+            ).strip(),
+            render_font_size_min=max(
+                float(os.getenv("OPENPDF2ZH_RENDER_FONT_SIZE_MIN", "0")),
+                0.0,
+            ),
+            render_font_size_max=max(
+                float(os.getenv("OPENPDF2ZH_RENDER_FONT_SIZE_MAX", "0")),
+                0.0,
+            ),
             render_layout_engine=_normalize_render_layout_engine(
                 os.getenv("OPENPDF2ZH_RENDER_LAYOUT_ENGINE")
             ),
@@ -198,7 +214,7 @@ class AppSettings:
                 "",
             ).strip(),
             pretext_helper_timeout_seconds=max(
-                float(os.getenv("OPENPDF2ZH_PRETEXT_HELPER_TIMEOUT_SECONDS", "20")),
+                float(os.getenv("OPENPDF2ZH_PRETEXT_HELPER_TIMEOUT_SECONDS", "60")),
                 1.0,
             ),
             job_queue_concurrency=max(
@@ -249,6 +265,13 @@ class AppSettings:
             ctranslate2_tokenizer_path=os.getenv(
                 "OPENPDF2ZH_CTRANSLATE2_TOKENIZER_PATH", ""
             ).strip(),
+            ctranslate2_device=(
+                os.getenv("OPENPDF2ZH_CTRANSLATE2_DEVICE", "cpu").strip() or "cpu"
+            ),
+            ctranslate2_compute_type=(
+                os.getenv("OPENPDF2ZH_CTRANSLATE2_COMPUTE_TYPE", "default").strip()
+                or "default"
+            ),
             openrouter_api_base_url=os.getenv(
                 "OPENPDF2ZH_OPENROUTER_API_BASE_URL",
                 OPENROUTER_API_BASE_URL,

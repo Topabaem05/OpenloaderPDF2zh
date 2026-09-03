@@ -77,6 +77,7 @@ async function measureRequests(payload) {
   const pretextModuleUrl = resolvePretextModuleUrl();
   const requests = normalizeRequests(payload);
   const renderFontUrl = toFontUrl(payload?.render_font_path);
+  const renderCjkFontUrl = toFontUrl(payload?.render_cjk_font_path);
   const scratchDir = await mkdtemp(join(tmpdir(), "pretext-layout-"));
   const scratchHtmlPath = join(scratchDir, "index.html");
   await writeFile(
@@ -115,14 +116,52 @@ async function measureRequests(payload) {
     await page.waitForFunction(() => window.__PRETEXT_READY__ === true);
 
     const results = await page.evaluate(
-      async ({ requests: browserRequests, renderFontUrl: browserRenderFontUrl }) => {
+      async ({
+        requests: browserRequests,
+        renderFontUrl: browserRenderFontUrl,
+        renderCjkFontUrl: browserRenderCjkFontUrl,
+      }) => {
         const pretext = window.__PRETEXT__;
         if (!pretext) {
           throw new Error("Pretext bridge did not initialize.");
         }
         const { prepareWithSegments, layoutWithLines } = pretext;
         const PX_PER_PT = 96 / 72;
+        const INLINE_LITERAL_PATTERN =
+          /(?:(?:https?:\/\/|www\.)[^\s<>()\[\]{}]*[A-Za-z0-9/#=_~%-]|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g;
         const loadedFonts = new Set();
+
+        function hasHyphenatedInlineLiteral(text) {
+          INLINE_LITERAL_PATTERN.lastIndex = 0;
+          for (const match of text.matchAll(INLINE_LITERAL_PATTERN)) {
+            if (match[0].includes("-")) {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function appendLiteralAwareText(block, text) {
+          INLINE_LITERAL_PATTERN.lastIndex = 0;
+          let previousEnd = 0;
+          for (const match of text.matchAll(INLINE_LITERAL_PATTERN)) {
+            if (!match[0].includes("-")) {
+              continue;
+            }
+            block.append(document.createTextNode(text.slice(previousEnd, match.index)));
+            const literal = document.createElement("span");
+            literal.style.display = "inline-block";
+            literal.style.maxWidth = "100%";
+            literal.style.whiteSpace = "normal";
+            literal.style.wordBreak = "normal";
+            literal.style.overflowWrap = "anywhere";
+            literal.style.verticalAlign = "baseline";
+            literal.textContent = match[0];
+            block.append(literal);
+            previousEnd = match.index + match[0].length;
+          }
+          block.append(document.createTextNode(text.slice(previousEnd)));
+        }
 
         function measureWithDom(
           text,
@@ -141,7 +180,9 @@ async function measureRequests(payload) {
           block.style.padding = "0";
           block.style.display = "block";
           block.style.whiteSpace = "pre-wrap";
-          block.style.wordBreak = "break-word";
+          block.style.wordBreak = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(text)
+            ? "keep-all"
+            : "break-word";
           block.style.overflowWrap = "break-word";
           block.style.fontFamily = fontFamilyCss;
           block.style.fontSize = `${fontSizePx}px`;
@@ -150,7 +191,7 @@ async function measureRequests(payload) {
           if (Number.isFinite(letterSpacingEm)) {
             block.style.letterSpacing = `${letterSpacingEm}em`;
           }
-          block.textContent = text;
+          appendLiteralAwareText(block, text);
           document.body.appendChild(block);
 
           const rect = block.getBoundingClientRect();
@@ -178,18 +219,24 @@ async function measureRequests(payload) {
           };
         }
 
-        async function loadRenderFont() {
-          if (!browserRenderFontUrl || loadedFonts.has(browserRenderFontUrl)) {
-            return;
+        async function loadRenderFonts() {
+          const configuredFonts = [
+            ["customrenderfont", browserRenderFontUrl],
+            ["customcjkfont", browserRenderCjkFontUrl],
+          ];
+          for (const [family, url] of configuredFonts) {
+            if (!url || loadedFonts.has(family)) {
+              continue;
+            }
+            const face = new FontFace(family, `url("${url}")`);
+            await face.load();
+            document.fonts.add(face);
+            loadedFonts.add(family);
           }
-          const face = new FontFace("customrenderfont", `url("${browserRenderFontUrl}")`);
-          await face.load();
-          document.fonts.add(face);
           await document.fonts.ready;
-          loadedFonts.add(browserRenderFontUrl);
         }
 
-        await loadRenderFont();
+        await loadRenderFonts();
 
         const output = {};
         for (const request of browserRequests) {
@@ -208,7 +255,12 @@ async function measureRequests(payload) {
           let lineCount = 1;
           let totalWidthPx = maxWidthPx;
 
-          if (letterSpacingEm !== null && Math.abs(letterSpacingEm) > 0.0001) {
+          const containsCjk = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(text);
+          if (
+            containsCjk ||
+            hasHyphenatedInlineLiteral(text) ||
+            (letterSpacingEm !== null && Math.abs(letterSpacingEm) > 0.0001)
+          ) {
             const domMeasurement = measureWithDom(
               text,
               request.font_family_css,
@@ -259,6 +311,7 @@ async function measureRequests(payload) {
       {
         requests,
         renderFontUrl,
+        renderCjkFontUrl,
       }
     );
 
