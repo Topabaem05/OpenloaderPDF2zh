@@ -54,6 +54,10 @@ class JobWorkspace:
     render_report_json: Path
     run_log: Path
 
+    @property
+    def document_ir_json(self) -> Path:
+        return self.parsed_dir / "document_ir.json"
+
 
 @dataclass(slots=True)
 class PipelineResult:

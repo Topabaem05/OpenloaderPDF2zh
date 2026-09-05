@@ -283,6 +283,7 @@ class TranslationService:
             return OpenRouterTranslator(
                 request.provider_api_key,
                 api_base_url=self.settings.openrouter_api_base_url,
+                max_workers=self.settings.translation_max_workers,
             )
         raise ValueError(f"Unsupported provider: {request.provider}")
 

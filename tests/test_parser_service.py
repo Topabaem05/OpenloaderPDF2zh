@@ -6,6 +6,7 @@ from pathlib import Path
 import fitz
 
 from openpdf2zh.config import AppSettings
+from openpdf2zh.document.serialization import read_document_ir
 from openpdf2zh.models import JobWorkspace
 from openpdf2zh.services.parser_service import ParserService
 
@@ -116,3 +117,72 @@ def test_build_detected_boxes_preview_closes_document(
     assert fake_doc.closed is True
     assert fake_doc.saved_path == str(workspace.detected_boxes_pdf)
     assert len(fake_page.draw_calls) == 1
+
+
+def test_build_document_ir_writes_rich_parser_artifact(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    document = fitz.open()
+    page = document.new_page(width=300, height=400)
+    page.insert_text((40, 80), "Hello document IR", fontsize=11)
+    document.save(workspace.input_pdf)
+    document.close()
+
+    workspace.raw_json.write_text(
+        json.dumps(
+            {
+                "elements": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "bounding box": [0, 0, 300, 400],
+                        "content": "Hello document IR",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    service = ParserService(AppSettings())
+    result_path = service._build_document_ir(workspace)
+
+    assert result_path == workspace.document_ir_json
+    restored = read_document_ir(result_path)
+    assert restored.pages[0].paragraphs[0].label == "paragraph"
+    assert "Hello document IR" in restored.pages[0].paragraphs[0].original_text
+
+
+def test_build_document_ir_protects_inline_formula(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sentence = "The relation Cp = (p-p0)/q0 is used here."
+    document = fitz.open()
+    page = document.new_page(width=400, height=300)
+    page.insert_text((40, 80), sentence, fontsize=11)
+    document.save(workspace.input_pdf)
+    document.close()
+
+    workspace.raw_json.write_text(
+        json.dumps(
+            {
+                "elements": [
+                    {
+                        "type": "paragraph",
+                        "page number": 1,
+                        "bounding box": [0, 0, 400, 300],
+                        "content": sentence,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ParserService(AppSettings())._build_document_ir(workspace)
+    restored = read_document_ir(workspace.document_ir_json)
+    runs = restored.pages[0].paragraphs[0].runs
+
+    formula = next(run for run in runs if run.kind == "formula")
+    assert formula.text == "Cp = (p-p0)/q0"
+    assert formula.translatable is False
+    assert formula.protection_reason == "formula"
+    assert "".join(run.text for run in runs) == sentence
