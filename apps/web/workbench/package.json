@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "vite",
     "test": "node --no-warnings --experimental-strip-types --test tests/*.test.mjs",
-    "build": "vite build",
+    "build": "vite build && node scripts/build-worker.mjs",
     "check": "npm run test && npm run build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:sites": "vite build && node scripts/build-worker.mjs",
+    "db:generate": "drizzle-kit generate",
+    "build:web": "vite build"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.3",
     "pdfjs-dist": "6.2.108",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
@@ -20,6 +24,7 @@
     "@types/react": "^19.1.12",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^5.9.2",
     "vite": "7.3.5"
   }

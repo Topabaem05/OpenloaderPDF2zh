@@ -1,21 +1,24 @@
 from __future__ import annotations
 
+import json
+import secrets
+import shutil
+import sqlite3
+import threading
+import warnings
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
-import shutil
-import threading
-import warnings
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
 import gradio as gr
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from openpdf2zh.config import (
-    AppSettings,
     OPENROUTER_FIXED_MODEL,
     OPENROUTER_PROVIDER,
+    AppSettings,
     normalize_provider,
 )
 from openpdf2zh.models import PipelineRequest
@@ -70,7 +73,7 @@ class JobRecord:
 
 
 class ApiProgressReporter:
-    def __init__(self, manager: "JobManager", job_id: str) -> None:
+    def __init__(self, manager: JobManager, job_id: str) -> None:
         self.manager = manager
         self.job_id = job_id
 
@@ -107,6 +110,32 @@ class JobManager:
         )
         self._records: dict[str, JobRecord] = {}
         self._lock = threading.Lock()
+        settings.workspace_root.mkdir(parents=True, exist_ok=True)
+        self._history_path = settings.workspace_root / "job_history.sqlite3"
+        with sqlite3.connect(self._history_path) as db:
+            db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            for (payload,) in db.execute("SELECT payload FROM jobs"):
+                record = JobRecord(**json.loads(payload))
+                if record.status in {"queued", "parsing", "translating", "rendering"}:
+                    record.status = record.stage = JOB_STATUS_FAILED
+                    record.message_ko = "서버가 재시작되어 작업이 중단되었습니다. 원본으로 다시 시도해 주세요."
+                    record.message_en = "Interrupted by server restart. Please retry with the original."
+                self._records[record.job_id] = record
+        for record in self._records.values():
+            self._persist(record)
+
+    def _persist(self, record: JobRecord) -> None:
+        with sqlite3.connect(self._history_path) as db:
+            db.execute(
+                "INSERT OR REPLACE INTO jobs (id, payload) VALUES (?, ?)",
+                (record.job_id, json.dumps(record.to_response(), ensure_ascii=False)),
+            )
+
+    def list_jobs(self) -> list[dict[str, object]]:
+        with self._lock:
+            return [record.to_response() for record in sorted(
+                self._records.values(), key=lambda item: item.created_at, reverse=True
+            )[:200]]
 
     async def submit_job(
         self,
@@ -170,6 +199,7 @@ class JobManager:
         )
         with self._lock:
             self._records[job_id] = record
+            self._persist(record)
 
         self._start_job_thread(
             job_id=job_id,
@@ -191,6 +221,7 @@ class JobManager:
             if record is None:
                 raise KeyError(job_id)
             record.queue_snapshot = self._queue_snapshot()
+            self._persist(record)
             record.updated_at = self._now_iso()
             return record.to_response()
 
@@ -205,6 +236,7 @@ class JobManager:
                 record.started_at = self._now_iso()
             record.updated_at = self._now_iso()
             record.queue_snapshot = self._queue_snapshot()
+            self._persist(record)
 
     def _start_job_thread(self, **kwargs: object) -> None:
         worker = threading.Thread(
@@ -274,6 +306,7 @@ class JobManager:
                     warning_messages.append(
                         f"Rendered with {result.overflow_count} overflow warning(s)."
                     )
+                (result.workspace.root / ".keep").touch()
                 public_structured_json = result.workspace.public_dir / "structured.json"
                 public_result_md = result.workspace.public_dir / "result.md"
                 if result.workspace.structured_json.exists():
@@ -298,6 +331,7 @@ class JobManager:
                     record.updated_at = self._now_iso()
                     record.finished_at = self._now_iso()
                     record.queue_snapshot = self._queue_snapshot()
+                    self._persist(record)
         except QueueBusyError as exc:
             self._mark_failed(job_id, JOB_STATUS_QUEUE_BUSY, str(exc))
         except QuotaExceededError as exc:
@@ -320,6 +354,7 @@ class JobManager:
             record.updated_at = self._now_iso()
             record.finished_at = self._now_iso()
             record.queue_snapshot = self._queue_snapshot()
+            self._persist(record)
 
     def _queue_snapshot(self) -> dict[str, int]:
         active, waiting = self.job_limiter.snapshot()
@@ -443,6 +478,18 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.job_manager = manager
     _attach_adsense_route(app)
     _attach_security_middleware(app)
+    @app.middleware("http")
+    async def protect_backend(request: Request, call_next):
+        if settings.api_token and request.url.path.startswith(("/api/", "/files/", "/gradio")):
+            supplied = request.headers.get("authorization", "")
+            if not secrets.compare_digest(supplied, f"Bearer {settings.api_token}"):
+                return JSONResponse({"detail": "Backend authorization required."}, status_code=401)
+        return await call_next(request)
+
+    @app.get("/api/jobs")
+    def list_jobs() -> list[dict[str, object]]:
+        return manager.list_jobs()
+
     app.mount("/files", StaticFiles(directory=settings.public_root), name="files")
 
     @app.post("/api/jobs", status_code=202)
@@ -478,8 +525,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Job not found.") from exc
 
     @app.get("/api/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, object]:
+        return {"status": "ok", "translation_ready": True, "storage": "workspace"}
 
     demo = create_demo(settings)
     demo.queue(
@@ -502,6 +549,8 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     frontend_dist = (
         Path(__file__).resolve().parents[2] / "apps" / "web" / "workbench" / "dist"
     ).resolve()
+    if (frontend_dist / "client" / "index.html").exists():
+        frontend_dist = frontend_dist / "client"
     assets_dir = frontend_dist / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")

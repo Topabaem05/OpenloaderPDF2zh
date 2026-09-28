@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  OPENPDF2ZH_CORS_ALLOWED_ORIGINS: https://openpdf2zh.vercel.app
+  OPENPDF2ZH_CORS_ALLOWED_ORIGINS: https://pdf.example.com
 
 jobs:
   smoke:
@@ -44,9 +44,9 @@ jobs:
         run: |
           set -euo pipefail
           headers="$(curl -si -X OPTIONS http://127.0.0.1:7860/api/health \
-            -H 'Origin: https://openpdf2zh.vercel.app' \
+            -H 'Origin: https://pdf.example.com' \
             -H 'Access-Control-Request-Method: GET')"
-          grep -qi '^access-control-allow-origin: https://openpdf2zh.vercel.app' <<<"$headers"
+          grep -qi '^access-control-allow-origin: https://pdf.example.com' <<<"$headers"
 
       - name: Verify workspace bind mount
         run: |

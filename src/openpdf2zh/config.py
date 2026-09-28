@@ -138,6 +138,7 @@ class AppSettings:
     rate_limit_storage_path: str = ""
     trust_forwarded_for: bool = True
     cors_allowed_origins: tuple[str, ...] = ()
+    api_token: str = ""
     ctranslate2_model_dir: str = _default_ctranslate2_model_dir()
     ctranslate2_tokenizer_path: str = ""
     ctranslate2_device: str = "cpu"
@@ -270,6 +271,7 @@ class AppSettings:
                 os.getenv("OPENPDF2ZH_TRUST_FORWARDED_FOR"),
                 default=True,
             ),
+            api_token=os.getenv("OPENPDF2ZH_API_TOKEN", "").strip(),
             cors_allowed_origins=_parse_cors_origins(
                 os.getenv("OPENPDF2ZH_CORS_ALLOWED_ORIGINS")
             ),

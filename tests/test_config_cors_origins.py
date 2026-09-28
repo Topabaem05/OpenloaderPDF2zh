@@ -12,14 +12,14 @@ def test_app_settings_parses_and_normalizes_cors_origins(
     monkeypatch.setenv("OPENPDF2ZH_WORKSPACE_ROOT", str(tmp_path / "workspace"))
     monkeypatch.setenv(
         "OPENPDF2ZH_CORS_ALLOWED_ORIGINS",
-        " https://openpdf2zh.vercel.app/, https://preview.example.com, "
-        "https://openpdf2zh.vercel.app ",
+        " https://pdf.example.com/, https://preview.example.com, "
+        "https://pdf.example.com ",
     )
 
     settings = AppSettings.from_env()
 
     assert settings.cors_allowed_origins == (
-        "https://openpdf2zh.vercel.app",
+        "https://pdf.example.com",
         "https://preview.example.com",
     )
 

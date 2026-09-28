@@ -22,15 +22,15 @@ OpenPDF2ZH already has a useful core: OpenDataLoader parsing, provider-based tra
 | Cancellation / resume | No | Limited | Batch workflow | No | Yes | No |
 | Provider extensibility | CTranslate2 + OpenRouter-compatible path | Broad | OpenAI-compatible endpoints | Broad | Broad | API-oriented |
 | Split frontend/backend deployment | Yes, documented | Deployment-specific | Library/service integration | Desktop/local | Extension | Yes |
-| Vercel-ready frontend | Yes | Not the primary path | Not the primary path | No | No | No |
+| GPT Sites frontend | Yes | Not the primary path | Not the primary path | No | No | No |
 
 ## Most important gaps
 
 ### P0 — production reliability
 
-1. **Frontend/backend coupling:** the workbench previously hard-coded same-origin `/api` and `/files` paths. A Vercel frontend could render but could not submit or retrieve translated artifacts from an external worker.
+1. **Frontend/backend coupling:** the workbench previously hard-coded same-origin `/api` and `/files` paths. A separate frontend could render but could not submit or retrieve translated artifacts from an external worker.
 2. **Cross-origin policy:** the FastAPI backend had no explicit CORS configuration for a separately hosted frontend.
-3. **Deployment reproducibility:** there was no root Vercel configuration, frontend environment contract, or frontend CI workflow.
+3. **Deployment reproducibility:** there was no host configuration, frontend environment contract, or frontend CI workflow.
 4. **Operational transparency:** the README did not explain that translation jobs are stateful, write workspace artifacts, and should remain on a container/VM rather than a short-lived static frontend host.
 
 These gaps are addressed by the 2026-08-20 deployment change.
@@ -55,7 +55,7 @@ These gaps are addressed by the 2026-08-20 deployment change.
 
 ```text
 Browser
-  -> Vercel: React/Vite static workbench
+  -> GPT Sites: React/Vite workbench and durable storage
        -> HTTPS API calls using VITE_API_BASE_URL
   -> Container/VM: FastAPI + Gradio fallback + translation worker
        -> local/persistent workspace and model assets

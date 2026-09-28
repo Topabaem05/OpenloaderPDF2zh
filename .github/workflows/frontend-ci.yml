@@ -33,6 +33,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Type check
+        run: npx tsc -p tsconfig.app.json --noEmit
+
       - name: Build production bundle
         run: npm run build
 

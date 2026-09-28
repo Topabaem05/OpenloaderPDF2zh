@@ -7,8 +7,8 @@ const previewSource = readFileSync(
   'utf8',
 );
 
-test('PDF preview disables embedded scripting and eval', () => {
+test('PDF preview uses canvas without a scripting manager', () => {
   assert.match(previewSource, /getDocument\s*\(\s*\{/);
-  assert.match(previewSource, /enableScripting:\s*false/);
-  assert.match(previewSource, /isEvalSupported:\s*false/);
+  assert.doesNotMatch(previewSource, /new (PDFScriptingManager|AnnotationLayer)/);
+  assert.match(previewSource, /page\.render/);
 });

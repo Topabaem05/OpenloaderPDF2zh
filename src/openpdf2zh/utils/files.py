@@ -5,11 +5,11 @@ import re
 import shutil
 import threading
 import time
-from collections.abc import Callable, Iterator
+import uuid
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 from openpdf2zh.models import JobWorkspace
 
@@ -22,7 +22,7 @@ def slugify(value: str) -> str:
 
 def make_job_id(file_stem: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{stamp}-{slugify(file_stem)}"
+    return f"{stamp}-{slugify(file_stem)}-{uuid.uuid4().hex[:12]}"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -96,7 +96,7 @@ def cleanup_expired_workspaces(root: Path, retention_seconds: float) -> list[Pat
     deleted: list[Path] = []
     public_root = root / "public"
     for workspace_dir in sorted(path for path in root.iterdir() if path.is_dir()):
-        if workspace_dir.name == "public":
+        if workspace_dir.name == "public" or (workspace_dir / ".keep").exists():
             continue
         if _latest_workspace_mtime(workspace_dir) >= cutoff:
             continue
@@ -139,8 +139,7 @@ def _latest_workspace_mtime(path: Path) -> float:
             child_mtime = child.stat().st_mtime
         except FileNotFoundError:
             continue
-        if child_mtime > latest_mtime:
-            latest_mtime = child_mtime
+        latest_mtime = max(latest_mtime, child_mtime)
     return latest_mtime
 
 

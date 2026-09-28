@@ -103,6 +103,9 @@ def test_api_job_lifecycle_returns_artifacts(tmp_path: Path, monkeypatch) -> Non
     artifact_response = client.get(payload["artifacts"]["translated_pdf"])
     assert artifact_response.status_code == 200
     assert artifact_response.content == b"%PDF translated"
+    reopened = TestClient(create_app(settings))
+    assert reopened.get("/api/jobs").json()[0]["status"] == "succeeded"
+    assert (settings.workspace_root / job_id / ".keep").exists()
 
 
 def test_api_job_reports_openrouter_key_failure(tmp_path: Path, monkeypatch) -> None:
@@ -161,3 +164,28 @@ def test_api_rejects_missing_openrouter_key_before_queue(tmp_path: Path) -> None
 
     assert response.status_code == 400
     assert response.json()["detail"] == "OpenRouter API key is required."
+
+
+def test_history_survives_restart_and_interrupted_jobs_are_failed(tmp_path: Path, monkeypatch) -> None:
+    settings = _settings(tmp_path)
+    app = create_app(settings)
+    monkeypatch.setattr(app.state.job_manager, "_start_job_thread", lambda **kwargs: None)
+    client = TestClient(app)
+    response = client.post("/api/jobs", files={"file": ("saved.pdf", _pdf_bytes(), "application/pdf")})
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+    reopened = TestClient(create_app(settings))
+    history = reopened.get("/api/jobs").json()
+    assert history[0]["job_id"] == job_id
+    assert history[0]["status"] == "failed"
+    assert "restart" in history[0]["message_en"]
+
+
+def test_backend_token_protects_history_and_artifacts(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.api_token = "test-backend-secret"
+    client = TestClient(create_app(settings))
+    assert client.get("/api/jobs").status_code == 401
+    assert client.get("/files/example/translated_mono.pdf").status_code == 401
+    assert client.get("/gradio/").status_code == 401
+    assert client.get("/api/jobs", headers={"Authorization": "Bearer test-backend-secret"}).status_code == 200

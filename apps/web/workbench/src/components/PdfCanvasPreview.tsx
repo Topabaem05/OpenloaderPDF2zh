@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
+import { getDocument, GlobalWorkerOptions, type PDFDocumentLoadingTask } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { calculateContainedPdfScale } from '../lib/viewport-fit';
 
@@ -56,7 +56,7 @@ export function PdfCanvasPreview({
 
   useEffect(() => {
     let cancelled = false;
-    let documentProxy: PDFDocumentProxy | null = null;
+    let loadingTask: PDFDocumentLoadingTask | null = null;
 
     const render = async () => {
       setIsLoading(true);
@@ -71,15 +71,14 @@ export function PdfCanvasPreview({
       }
 
       try {
-        const loadingTask = getDocument({
+        // Canvas rendering only: no annotation layer or PDF scripting manager.
+        loadingTask = getDocument({
           url: src,
-          enableScripting: false,
-          isEvalSupported: false,
         });
-        documentProxy = await loadingTask.promise;
+        const documentProxy = await loadingTask.promise;
 
         if (cancelled) {
-          await documentProxy.destroy();
+          await loadingTask.destroy();
           return;
         }
 
@@ -104,7 +103,7 @@ export function PdfCanvasPreview({
 
         const activeCanvas = canvasRef.current;
         if (!activeCanvas) {
-          await documentProxy.destroy();
+          await loadingTask.destroy();
           return;
         }
 
@@ -123,6 +122,7 @@ export function PdfCanvasPreview({
         context.clearRect(0, 0, viewport.width, viewport.height);
 
         const renderTask = page.render({
+          canvas: activeCanvas,
           canvasContext: context,
           viewport,
         });
@@ -148,8 +148,8 @@ export function PdfCanvasPreview({
 
     return () => {
       cancelled = true;
-      if (documentProxy) {
-        void documentProxy.destroy();
+      if (loadingTask) {
+        void loadingTask.destroy();
       }
     };
   }, [containerSize.height, containerSize.width, pageNumber, src, zoomPercent]);
@@ -157,7 +157,7 @@ export function PdfCanvasPreview({
   return (
     <div ref={shellRef} className="pdf-preview-shell">
       <canvas ref={canvasRef} className={`pdf-preview-canvas${isLoading ? ' is-loading' : ''}`} />
-      {isLoading ? <div className="pdf-preview-state">Rendering the translated preview…</div> : null}
+      {isLoading ? <div className="pdf-preview-state">PDF 미리보기를 불러오는 중…</div> : null}
       {error ? <div className="pdf-preview-state is-error">{error}</div> : null}
     </div>
   );

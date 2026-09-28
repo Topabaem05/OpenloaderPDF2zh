@@ -1,49 +1,7 @@
-import type { ChangeEvent } from 'react';
-
-interface UploadPanelProps {
-  file: File | null;
-  onFileChange: (file: File | null) => void;
-}
-
-export function UploadPanel({ file, onFileChange }: UploadPanelProps) {
-  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const nextFile = event.target.files?.[0] ?? null;
-    onFileChange(nextFile);
-  };
-
-  return (
-    <section className={`panel upload-panel${file ? ' compact' : ''}`}>
-      <div className="panel-heading">
-        <span className="eyebrow">Source document</span>
-        <h2>Load a manuscript</h2>
-        <p>The PDF stays in place until you reset the workspace.</p>
-      </div>
-
-      {file ? (
-        <div className="upload-file-pill">
-          <strong>{file.name}</strong>
-        </div>
-      ) : null}
-
-      <label className="upload-dropzone">
-        <input
-          type="file"
-          accept="application/pdf"
-          onChange={handleChange}
-          onClick={(event) => {
-            event.currentTarget.value = '';
-          }}
-        />
-        <span className="upload-icon" aria-hidden="true">
-          PDF
-        </span>
-        <strong>{file ? 'Replace source PDF' : 'Select a source PDF'}</strong>
-        <span>
-          {file
-            ? 'Click to replace.'
-            : 'Drag a manuscript here or click to browse.'}
-        </span>
-      </label>
-    </section>
-  );
+import { useRef, useState } from 'react';
+interface UploadPanelProps {file:File|null;onFileChange:(file:File|null)=>void;}
+export function UploadPanel({file,onFileChange}:UploadPanelProps){
+ const [dragging,setDragging]=useState(false),[error,setError]=useState('');const input=useRef<HTMLInputElement>(null);
+ async function accept(files:FileList|null){setError('');if(!files||files.length!==1){setError('PDF 파일 하나를 선택해 주세요.');return;}const next=files[0];if(!next.name.toLowerCase().endsWith('.pdf')||next.size===0||next.size>20*1024*1024){setError('20MB 이하 PDF 파일을 선택해 주세요.');return;}if(!(await next.slice(0,5).text()).startsWith('%PDF-')){setError('올바른 PDF 파일이 아닙니다.');return;}onFileChange(next);}
+ return <section className={`upload-panel ${dragging?'is-dragging':''}`} onDragOver={e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={e=>{e.preventDefault();setDragging(false);void accept(e.dataTransfer.files);}}><input ref={input} type="file" accept=".pdf,application/pdf" aria-label="PDF 파일 선택" onChange={e=>{void accept(e.target.files);e.target.value='';}}/><span className="upload-symbol" aria-hidden="true">↑</span><h2>{file?'다른 PDF 선택':'PDF를 여기에 놓아 주세요'}</h2><p>드래그 앤 드롭하거나 파일을 선택하세요.</p><button className="browse-button" onClick={()=>input.current?.click()}>PDF 파일 선택</button><small>PDF · 최대 20MB · 원본 형식 보존</small>{error&&<p role="alert" className="error-message">{error}</p>}</section>;
 }

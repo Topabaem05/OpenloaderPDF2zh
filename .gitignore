@@ -33,3 +33,5 @@ resources/models/*
 !resources/models/quickmt/quickmt-ko-en/**
 !resources/models/quickmt/quickmt-en-ko/
 !resources/models/quickmt/quickmt-en-ko/**
+
+**/.sites-runtime/
