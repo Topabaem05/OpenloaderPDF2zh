@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { previewApi } from './scripts/preview-api.mjs';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), previewApi()],
   base: '/',
   build: {
     outDir: 'dist',
@@ -11,5 +12,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    host: "0.0.0.0",
+    allowedHosts: ["terminal.local"],
   },
 });

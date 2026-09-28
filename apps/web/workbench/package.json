@@ -11,7 +11,11 @@
     "preview": "vite preview",
     "build:sites": "vite build && node scripts/build-worker.mjs",
     "db:generate": "drizzle-kit generate",
-    "build:web": "vite build"
+    "build:web": "vite build",
+    "predev": "node scripts/prepare-pdf-assets.mjs",
+    "prebuild": "node scripts/prepare-pdf-assets.mjs",
+    "prebuild:web": "node scripts/prepare-pdf-assets.mjs",
+    "prebuild:sites": "node scripts/prepare-pdf-assets.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",

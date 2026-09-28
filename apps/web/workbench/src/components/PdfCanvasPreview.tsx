@@ -74,6 +74,10 @@ export function PdfCanvasPreview({
         // Canvas rendering only: no annotation layer or PDF scripting manager.
         loadingTask = getDocument({
           url: src,
+          cMapUrl: "/pdfjs/cmaps/",
+          cMapPacked: true,
+          standardFontDataUrl: "/pdfjs/standard_fonts/",
+          wasmUrl: "/pdfjs/wasm/",
         });
         const documentProxy = await loadingTask.promise;
 
@@ -156,7 +160,7 @@ export function PdfCanvasPreview({
 
   return (
     <div ref={shellRef} className="pdf-preview-shell">
-      <canvas ref={canvasRef} className={`pdf-preview-canvas${isLoading ? ' is-loading' : ''}`} />
+      <canvas aria-label={`PDF ${pageNumber}페이지 미리보기`} role="img" ref={canvasRef} className={`pdf-preview-canvas${isLoading ? ' is-loading' : ''}`} />
       {isLoading ? <div className="pdf-preview-state">PDF 미리보기를 불러오는 중…</div> : null}
       {error ? <div className="pdf-preview-state is-error">{error}</div> : null}
     </div>
